@@ -18,6 +18,9 @@ export type TurnoverCause = "STEAL" | "BAD_PASS" | "HANDLE" | "OFFENSIVE_FOUL";
 
 export type FoulType = "SHOOTING" | "PERSONAL" | "OFFENSIVE";
 
+/** Sévérité d'une blessure (plan-développement §Phase 2 — Session 2). */
+export type InjurySeverity = "MINOR" | "MODERATE" | "SEVERE";
+
 export type Event =
   | {
       t: "SHOT";
@@ -47,4 +50,5 @@ export type Event =
       total: number;
       clock: number;
     }
-  | { t: "SUB"; in: string; out: string; clock: number }; // P2
+  | { t: "SUB"; in: string; out: string; clock: number } // P2
+  | { t: "INJURY"; player: string; severity: InjurySeverity; clock: number }; // P2 — Session 2

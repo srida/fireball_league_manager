@@ -138,4 +138,25 @@ describe(`Propriétés invariantes sur ${games.length} matchs seedés (spec-test
     }
     expect(unknownReferences).toBe(0);
   });
+
+  it("un joueur blessé (INJURY) n'apparaît plus jamais dans le log après sa sortie (plan P2 §Session 2)", () => {
+    let violations = 0;
+    let totalInjuries = 0;
+    for (const { game, injuries } of games) {
+      totalInjuries += injuries.length;
+      const injuredIds = new Set(injuries.map((inj) => inj.playerId));
+      const injuredSoFar = new Set<string>();
+      for (const event of game.events) {
+        if (event.t === "INJURY") {
+          injuredSoFar.add(event.player);
+          continue;
+        }
+        if ("player" in event && injuredSoFar.has(event.player)) violations++;
+        if (event.t === "SUB" && injuredSoFar.has(event.in)) violations++;
+      }
+      for (const id of injuredIds) if (!injuredSoFar.has(id)) violations++;
+    }
+    expect(violations).toBe(0);
+    expect(totalInjuries).toBeGreaterThan(0);
+  });
 });

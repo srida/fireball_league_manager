@@ -76,6 +76,15 @@ describe(`Distributions ligue sur ${SEASONS} saisons (spec-tests-phase1 §3)`, (
     expect(metrics.worstTeamWins).toBeGreaterThan(0);
   });
 
+  it("blessures/équipe/saison dans la cible (plan-développement §Phase 2 — Session 2 : ~4-6/équipe/saison)", () => {
+    expect(metrics.injuriesPerTeamPerSeason).toBeGreaterThanOrEqual(
+      STATISTICAL_TEST_TARGETS.injuriesPerTeamPerSeason.min,
+    );
+    expect(metrics.injuriesPerTeamPerSeason).toBeLessThanOrEqual(
+      STATISTICAL_TEST_TARGETS.injuriesPerTeamPerSeason.max,
+    );
+  });
+
   it("[warning] meilleur scoreur ligue — écart connu, non bloquant (docs/decisions.md)", () => {
     const { min, max } = STATISTICAL_TEST_TARGETS.topScorerPpg;
     if (metrics.topScorerPpg < min || metrics.topScorerPpg > max) {

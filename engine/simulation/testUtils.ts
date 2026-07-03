@@ -142,6 +142,8 @@ export function makeGameState(homeFive: Player[], awayFive: Player[], overrides?
       HOME: createGameRotationState(buildRotationPlan(homeFive)),
       AWAY: createGameRotationState(buildRotationPlan(awayFive)),
     },
+    gameStamina: Object.fromEntries([...homeFive, ...awayFive].map((p) => [p.id, 100])),
+    injuries: {},
     context: { homeTeamId: "home", awayTeamId: "away" },
     ...overrides,
   };

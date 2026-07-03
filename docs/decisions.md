@@ -222,3 +222,63 @@ terrain ; ne s'applique pas au foul-out (toujours immédiat) ni à la mise au
 repos pour fautes précoces. Ramène les substitutions à ~35-40/match des deux
 équipes cumulées.
 → `engine/config/tuning.ts` (`ROTATION.minimumStintSeconds`), `engine/simulation/rotation.ts`
+
+## Phase 2 — Fatigue et blessures (Session 2)
+
+### Modèle de repos inter-matchs : proxy stochastique, pas de calendrier à jours
+`schedule.ts` ne porte aucune date réelle (juste une liste ordonnée de
+fixtures) : pas de moyen natif de détecter un vrai back-to-back. Deux options
+présentées à l'utilisateur ; **décision (validée)** : un flag back-to-back est
+tiré aléatoirement par match et par équipe (`FATIGUE.backToBackRate = 0.16`),
+sans jours/dates réels — un vrai calendrier à jours (algorithme glouton
+d'assignation, sans double-réservation d'équipe) est jugé plus à sa place avec
+le mode match live (Session 4), où une notion de date devient de toute façon
+nécessaire pour l'UI.
+→ `engine/config/tuning.ts` (`FATIGUE`), `engine/season/season.ts` (`playRealGame`)
+
+### Granularité du contrôle de blessure : à chaque possession
+Décision validée : le risque de blessure est vérifié à chaque possession pour
+chaque joueur sur le terrain (même logique que le suivi des fautes déjà en
+place depuis la Session 1), plutôt qu'un tirage unique en fin de match — capture
+le moment exact dans le play-by-play (événement `INJURY`) et permet une sortie
+forcée immédiate réaliste, cohérent avec l'architecture event-sourced.
+→ `engine/simulation/fatigue.ts` (`checkInjuries`)
+
+### Trait "Guerrier" (retour de blessure plus rapide, joue mieux fatigué) — reporté à la Session 3
+Le bloc mental/traits est explicitement prévu pour la Session 3 (pression et
+mental) ; décision validée : ne pas fragmenter cette logique entre deux
+sessions, même si "Guerrier" touche directement fatigue/blessure. `mental.traits`
+n'est lu par aucune formule de fatigue/blessure pour l'instant.
+→ à activer en Session 3, `engine/config/tuning.ts` (`pressureModifier`)
+
+### `gameStaminaFactor` lit désormais un état de simulation vivant, pas `player.state`
+En P1/Session 1, `gameStaminaFactor` était appelé avec `player.state.gameStamina`
+— une valeur figée à la génération (toujours 100, jamais mise à jour). Cette
+Session 2 introduit `GameState.gameStamina : Record<playerId, number>`, décroissant
+pour les joueurs sur le terrain et récupérant pour ceux au banc à chaque
+possession (`applyFatigueDrain`), au même titre que `cumulativeSeconds` en
+rotation.ts (état de simulation dérivé, jamais recalculé depuis le log
+d'événements). `player.state.gameStamina` reste donc un champ figé/inutilisé
+par le moteur — seule la `fitness` de fin de saison précédente (portée par
+`season.ts`) initialise la valeur de départ d'un match.
+→ `engine/types/game.ts`, `engine/simulation/fatigue.ts`, `engine/simulation/possession.ts`, `engine/simulation/game.ts`
+
+### Persistance saison de la fatigue/blessures : fermeture stateful dans `season.ts`, moteur de match resté pur
+`simulateGame`/`resolvePossession` restent des fonctions pures (aucune
+mutation de `Player`) : `simulateGame` renvoie en plus les blessures survenues
+(`injuries`) et les minutes réellement jouées (déjà exposées en Session 1).
+`season.ts` (`playRealGame`) est la seule couche qui fait persister `fitness`
+(usure/récupération inter-matchs) et le décompte des matchs d'indisponibilité
+après blessure — la même fermeture est réutilisée pour la saison régulière, le
+play-in et les playoffs, donc la fatigue accumulée compte aussi en playoffs.
+Les durées de blessure sont exprimées en **matchs manqués**, pas en jours
+calendaires (même raison que le proxy back-to-back ci-dessus).
+→ `engine/season/season.ts`
+
+### Calibration : probabilité de blessure ajustée après batch de contrôle
+Cible plan-développement : ~4-6 blessures significatives par équipe et par
+saison. Premier batch de contrôle (10 saisons, seed `fblm-session2-control`) :
+6.3/équipe/saison avec `INJURY.baseProbPerPossession = 0.00006`. Ajusté à
+`0.00005` (×0.83) → 5.1/équipe/saison sur un second batch de contrôle, dans la
+cible `LEAGUE_TARGETS.injuriesPerTeamPerSeason` [4-6].
+→ `engine/config/tuning.ts` (`INJURY.baseProbPerPossession`)

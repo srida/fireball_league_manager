@@ -3,9 +3,10 @@
  * `resolvePossession` est la fonction cœur du moteur : pure, seedée, produit un
  * log d'événements (source de vérité — box scores dérivés, jamais calculés à part).
  *
- * P1 : seuls `physical` et `skills` sont actifs (spec-player-model §9). Les hooks
- * P2 (`pressureModifier`, `gameStaminaFactor`) sont appelés mais renvoient
- * l'identité (CLAUDE.md — scope P1). `mental`/`hidden` ne pilotent aucune formule ici.
+ * P1 : seuls `physical` et `skills` sont actifs (spec-player-model §9). P2
+ * Session 2 : `gameStaminaFactor` lit désormais l'état de fatigue vivant du
+ * match (`state.gameStamina`, plan-développement §Phase 2). `pressureModifier`
+ * reste identité jusqu'à la Session 3 (pression et mental).
  */
 import {
   ACTION_MODIFIERS,
@@ -53,19 +54,24 @@ function avg(...values: number[]): number {
 }
 
 /** spec §3 — usageWeight(p) = w1·ballHandling + w2·courtVision + w3·moyenne(finishing,midRange,threePoint) × positionFactor × gameStaminaFactor. */
-function usageWeight(p: OnCourtPlayer): number {
+function usageWeight(p: OnCourtPlayer, gameStamina: Readonly<Record<string, number>>): number {
   const { effective, player } = p;
   const raw =
     USAGE.w1BallHandling * effective.ballHandling +
     USAGE.w2CourtVision * effective.courtVision +
     USAGE.w3ScoringAverage * avg(effective.finishing, effective.midRange, effective.threePoint);
-  return raw * USAGE.positionFactor[player.position] * gameStaminaFactor(player.state.gameStamina);
+  return raw * USAGE.positionFactor[player.position] * gameStaminaFactor(gameStamina[player.id] ?? 100);
 }
 
-function chooseCarrier(offense: readonly OnCourtPlayer[], rng: RNG, exclude?: string): OnCourtPlayer {
+function chooseCarrier(
+  offense: readonly OnCourtPlayer[],
+  rng: RNG,
+  gameStamina: Readonly<Record<string, number>>,
+  exclude?: string,
+): OnCourtPlayer {
   const pool = exclude ? offense.filter((p) => p.player.id !== exclude) : offense;
   const candidates = pool.length > 0 ? pool : offense;
-  return rng.weightedPick(candidates.map((p) => ({ item: p, weight: Math.max(usageWeight(p), 0.01) })));
+  return rng.weightedPick(candidates.map((p) => ({ item: p, weight: Math.max(usageWeight(p, gameStamina), 0.01) })));
 }
 
 /** P1 : matching poste pour poste (spec §3 fin). Fallback sur le premier défenseur disponible. */
@@ -223,6 +229,7 @@ function resolveShot(
   lastPasser: string | undefined,
   isPutback: boolean,
   clock: number,
+  gameStamina: Readonly<Record<string, number>>,
   rng: RNG,
 ): ShotResolution {
   const shotType = chooseShotType(shooter, offenseTactics, rng, isPutback);
@@ -262,7 +269,7 @@ function resolveShot(
         : shooter.effective.finishing;
 
   const pressureMod = pressureModifier(shooter.player.hidden.trueComposure, shooter.player.mental.traits, 0);
-  const fatigueFactor = gameStaminaFactor(shooter.player.state.gameStamina);
+  const fatigueFactor = gameStaminaFactor(gameStamina[shooter.player.id] ?? 100);
   const pMake = computePMake(shotType, shooterAttr, defAttr, contest, isHome, pressureMod, fatigueFactor);
 
   const made = rng.bool(pMake);
@@ -417,7 +424,7 @@ export function resolvePossession(state: GameState, rng: RNG): PossessionResult 
 
   let shotClockRemaining = 24;
   let passCount = 0;
-  let carrier = chooseCarrier(offense, rng);
+  let carrier = chooseCarrier(offense, rng, state.gameStamina);
   let lastPasser: string | undefined;
   let isPutback = false;
 
@@ -454,6 +461,7 @@ export function resolvePossession(state: GameState, rng: RNG): PossessionResult 
           lastPasser,
           isPutback,
           quarterClockRemaining,
+          state.gameStamina,
           rng,
         );
         events.push(...shot.events);
@@ -508,7 +516,7 @@ export function resolvePossession(state: GameState, rng: RNG): PossessionResult 
       shotClockRemaining -= passTime;
       passCount++;
       lastPasser = carrier.player.id;
-      carrier = chooseCarrier(offense, rng, carrier.player.id);
+      carrier = chooseCarrier(offense, rng, state.gameStamina, carrier.player.id);
     }
 
     if (!resolvedThisCycle) {

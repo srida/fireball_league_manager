@@ -1,5 +1,5 @@
 import type { Position, TeamSide } from "./common.js";
-import type { Event } from "./event.js";
+import type { Event, InjurySeverity } from "./event.js";
 import type { Player, PlayerPhysical, PlayerSkills } from "./player.js";
 import type { TeamTactics } from "./team.js";
 
@@ -85,6 +85,15 @@ export interface GameState {
   tactics: Record<TeamSide, TeamTactics>;
   /** Hiérarchie de rotation et minutes/fautes vivantes de chaque équipe (P2). */
   rotation: Record<TeamSide, GameRotationState>;
+  /**
+   * Fatigue intra-match courante (0-100), toutes équipes confondues (plan P2
+   * §Session 2). État de simulation dérivé, pas lu depuis `player.state` figé
+   * à la génération — seule la valeur de départ vient de la fitness saison
+   * (season.ts), jamais recalculée à partir du log d'événements.
+   */
+  gameStamina: Record<string, number>;
+  /** Blessures survenues pendant ce match (plan P2 §Session 2), sortie forcée définitive. */
+  injuries: Record<string, { severity: InjurySeverity; gamesOut: number }>;
   context: {
     homeTeamId: string;
     awayTeamId: string;

@@ -3,12 +3,13 @@
  * classement, play-in et playoffs (CLAUDE.md boucle annuelle). Utilisé par
  * le harnais batch (Session D) et par les tests d'intégration de bout en bout.
  */
+import { FATIGUE } from "../config/tuning.js";
 import { generateSchedule } from "./schedule.js";
 import { computeStandings, standingsForConference, type TeamStanding } from "./standings.js";
 import { runConferenceBracket, runFinals, runPlayIn, type BracketResult, type SeriesResult } from "./playoffs.js";
 import { simulateGame } from "../simulation/game.js";
 import type { RNG } from "../utils/rng.js";
-import type { Event, Game, League, Team } from "../types/index.js";
+import type { Event, Game, League, Player, Team } from "../types/index.js";
 
 export interface SeasonResult {
   regularSeasonGames: Game[];
@@ -25,20 +26,86 @@ interface RealGameResult {
   events: Event[];
 }
 
-/** Simule un match unique via le moteur de possession réel (spec-possession-algorithm.md). */
+/**
+ * Disponibilité d'un joueur à l'échelle de la saison (plan P2 §Session 2) :
+ * `fitness` persiste entre les matchs (contrairement à `gameStamina`, remis à
+ * niveau à chaque match par simulateGame) ; `injuryGamesRemaining` décompte
+ * les matchs d'indisponibilité restants après une blessure.
+ */
+interface PlayerAvailability {
+  fitness: number;
+  injuryGamesRemaining: number;
+}
+
+/**
+ * Simule un match unique via le moteur de possession réel (spec-possession-algorithm.md).
+ * Possède l'état de fatigue/blessure inter-matchs (plan P2 §Session 2) : le
+ * moteur de possession (`simulateGame`) reste pur, cette fermeture est la
+ * seule couche qui fait persister `fitness`/blessures d'un match au suivant,
+ * pour la saison régulière comme pour le play-in et les playoffs (même
+ * fermeture réutilisée par tout `simulateSeason`).
+ */
 function playRealGame(rng: RNG, teamById: Map<string, Team>) {
+  const availability = new Map<string, PlayerAvailability>();
+  const getAvailability = (playerId: string): PlayerAvailability => {
+    let a = availability.get(playerId);
+    if (!a) {
+      a = { fitness: 100, injuryGamesRemaining: 0 };
+      availability.set(playerId, a);
+    }
+    return a;
+  };
+
+  /**
+   * Prépare le roster disponible d'une équipe avant un match : récupération de
+   * fitness selon le repos (proxy stochastique back-to-back, docs/decisions.md
+   * "Modèle de repos inter-matchs"), décompte des blessures en cours, exclusion
+   * des joueurs toujours indisponibles.
+   */
+  function prepareRoster(team: Team, isBackToBack: boolean): { roster: Player[]; startingFitness: Record<string, number> } {
+    const roster: Player[] = [];
+    const startingFitness: Record<string, number> = {};
+    const recovery = isBackToBack ? FATIGUE.backToBackRecovery : FATIGUE.restRecovery;
+
+    for (const player of team.roster) {
+      const a = getAvailability(player.id);
+      a.fitness = Math.min(100, a.fitness + recovery);
+      if (a.injuryGamesRemaining > 0) a.injuryGamesRemaining -= 1;
+      if (a.injuryGamesRemaining <= 0) {
+        roster.push(player);
+        startingFitness[player.id] = a.fitness;
+      }
+    }
+    return { roster, startingFitness };
+  }
+
   return (homeTeamId: string, awayTeamId: string): RealGameResult => {
     const home = teamById.get(homeTeamId) as Team;
     const away = teamById.get(awayTeamId) as Team;
-    const { game } = simulateGame(rng, {
+
+    const homePrep = prepareRoster(home, rng.bool(FATIGUE.backToBackRate));
+    const awayPrep = prepareRoster(away, rng.bool(FATIGUE.backToBackRate));
+
+    const { game, minutesPlayed, injuries } = simulateGame(rng, {
       gameId: `${homeTeamId}-vs-${awayTeamId}-${rng.int(0, 1_000_000_000)}`,
       homeTeamId,
       awayTeamId,
-      homeRoster: home.roster,
-      awayRoster: away.roster,
+      homeRoster: homePrep.roster,
+      awayRoster: awayPrep.roster,
       homeTactics: home.tactics,
       awayTactics: away.tactics,
+      homeStartingFitness: homePrep.startingFitness,
+      awayStartingFitness: awayPrep.startingFitness,
     });
+
+    for (const [playerId, minutes] of Object.entries(minutesPlayed)) {
+      const a = getAvailability(playerId);
+      a.fitness = Math.max(0, a.fitness - minutes * FATIGUE.fitnessWearPerMinute);
+    }
+    for (const injury of injuries) {
+      getAvailability(injury.playerId).injuryGamesRemaining = injury.gamesOut;
+    }
+
     return { homeScore: game.homeScore, awayScore: game.awayScore, events: game.events };
   };
 }

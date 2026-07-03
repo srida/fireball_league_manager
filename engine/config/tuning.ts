@@ -1,6 +1,7 @@
 import type {
   ArchetypeId,
   DefensiveAggressiveness,
+  InjurySeverity,
   OffensiveOrientation,
   Pace,
   Position,
@@ -347,11 +348,93 @@ export const TACTIC_ASSIGNMENT = {
 } as const;
 
 // ---------------------------------------------------------------------------
+// Fatigue et blessures (P2, plan-développement §Phase 2 — Session 2)
+// ---------------------------------------------------------------------------
+
+export const FATIGUE = {
+  /**
+   * ⚙ Perte de gameStamina par seconde passée sur le terrain (pace NORMAL).
+   * Un titulaire à ~40 min réelles (déborde son quota cible) finit proche de 0.
+   * Valeur initiale — à calibrer.
+   */
+  drainPerSecond: 100 / (40 * 60),
+  /**
+   * ⚙ Récupération par seconde passée au banc — plus rapide que le drain pour
+   * que les rotations aient un effet net sur la fatigue. Valeur initiale — à calibrer.
+   */
+  recoveryPerSecond: 100 / (10 * 60),
+  /** ⚙ Le pace de l'équipe module la vitesse de sa propre fatigue (plus de possessions/minute en FAST). */
+  paceDrainMultiplier: {
+    SLOW: 0.9,
+    NORMAL: 1.0,
+    FAST: 1.15,
+  } satisfies Record<Pace, number>,
+  /** ⚙ gameStaminaFactor(gameStamina) : pas de pénalité au-dessus de ce seuil. */
+  noPenaltyThreshold: 70,
+  /** ⚙ Pénalité d'attributs effectifs par point de gameStamina sous le seuil. */
+  penaltyPerPoint: 0.006,
+  /** ⚙ Plancher du facteur (pénalité max ~18 % à gameStamina 0). */
+  minFactor: 0.82,
+  /**
+   * ⚙ Fitness inter-match (persiste sur toute la saison, contrairement à
+   * gameStamina remis à niveau à chaque match). Coût en fitness par minute
+   * jouée au match précédent.
+   */
+  fitnessWearPerMinute: 0.35,
+  /** ⚙ Récupération de fitness avant un match avec repos normal. */
+  restRecovery: 22,
+  /** ⚙ Récupération de fitness avant un match enchaîné (back-to-back). */
+  backToBackRecovery: 6,
+  /**
+   * ⚙ Probabilité qu'un match donné soit un back-to-back pour une équipe.
+   * Proxy stochastique (décision produit Session 2) : le calendrier actuel
+   * (schedule.ts) ne porte aucune date réelle, donc pas de vraie détection de
+   * jours consécutifs — un vrai calendrier à jours est plus à sa place avec
+   * le mode match live (Session 4). Taux calibré sur un rythme NBA-esque.
+   */
+  backToBackRate: 0.16,
+} as const;
+
+/**
+ * ⚙ Blessures probabilistes (plan-développement §Phase 2 — Session 2), fonction
+ * de la fatigue courante, de `injuryProneness` (caché) et de l'âge (dérivé de
+ * `birthDate`, référence `PLAYER_GENERATION.referenceDate` — pas de calendrier
+ * saison réel en P2). Durées exprimées en matchs manqués, pas en jours
+ * calendaires (même raison que `FATIGUE.backToBackRate`).
+ * Vérifiée à chaque possession, pour chaque joueur sur le terrain (décision
+ * produit Session 2 — cohérent avec le suivi des fautes déjà en place).
+ */
+export const INJURY = {
+  /**
+   * ⚙ calibré pour ~4-6 blessures significatives par équipe et par saison
+   * (plan-développement §Phase 2). Ajusté de 0.00006 à 0.00005 après un batch
+   * de contrôle 10 saisons mesurant 6.3/équipe/saison (docs/decisions.md).
+   */
+  baseProbPerPossession: 0.00005,
+  /** ⚙ Sous `fatigueThreshold`, +X %/point de gameStamina manquant. */
+  fatigueThreshold: 60,
+  fatigueMultiplierPerPoint: 0.02,
+  /** ⚙ `injuryProneness` moyen de génération (`PLAYER_GENERATION.hidden.injuryProneness.mean`) → multiplicateur neutre 1. */
+  proneNeutral: 30,
+  /** ⚙ Plancher du multiplicateur de proneness (un joueur très peu sujet aux blessures n'est jamais à 0 risque). */
+  pronenessFloor: 0.3,
+  /** ⚙ Au-delà de cet âge, +X %/an de risque. */
+  ageNeutral: 27,
+  ageMultiplierPerYear: 0.05,
+  /** ⚙ Table de sévérité : poids de tirage + fourchette de matchs manqués. */
+  types: [
+    { severity: "MINOR", weight: 0.6, gamesRange: [1, 3] },
+    { severity: "MODERATE", weight: 0.3, gamesRange: [4, 10] },
+    { severity: "SEVERE", weight: 0.1, gamesRange: [15, 40] },
+  ] satisfies readonly { severity: InjurySeverity; weight: number; gamesRange: readonly [number, number] }[],
+} as const;
+
+// ---------------------------------------------------------------------------
 // Hooks prévus par les specs — actifs à partir de P2, renvoient 1 en P1
 // (CLAUDE.md — scope P1 : "Les hooks... existent mais renvoient 1.")
 // ---------------------------------------------------------------------------
 
-/** Modificateur de pression (spec-player-model.md §7). P2. Identité en P1. */
+/** Modificateur de pression (spec-player-model.md §7). P3 (traits/pression complets en Session 3) — identité pour l'instant. */
 export function pressureModifier(
   _trueComposure: number,
   _traits: readonly Trait[],
@@ -360,9 +443,11 @@ export function pressureModifier(
   return 1;
 }
 
-/** Facteur de stamina intra-match (spec-possession-algorithm.md §3). P2. Identité en P1. */
-export function gameStaminaFactor(_gameStamina: number): number {
-  return 1;
+/** Facteur de stamina intra-match (spec-possession-algorithm.md §3, plan P2 §Session 2). */
+export function gameStaminaFactor(gameStamina: number): number {
+  if (gameStamina >= FATIGUE.noPenaltyThreshold) return 1;
+  const deficit = FATIGUE.noPenaltyThreshold - gameStamina;
+  return Math.max(FATIGUE.minFactor, 1 - deficit * FATIGUE.penaltyPerPoint);
 }
 
 // ---------------------------------------------------------------------------
@@ -380,6 +465,8 @@ export const LEAGUE_TARGETS = {
   topScorerPpg: { min: 28, max: 33 },
   winsSpreadBestVsWorst: { best: 60, worst: 15 },
   calibrationSeasons: 50,
+  /** ⚙ Blessures significatives par équipe et par saison (plan-développement §Phase 2 — Session 2). */
+  injuriesPerTeamPerSeason: { min: 4, max: 6 },
 } as const;
 
 /**
@@ -401,6 +488,8 @@ export const STATISTICAL_TEST_TARGETS = {
   bestTeamWins: { min: 55, max: 68 },
   worstTeamWins: { min: 10, max: 22 },
   talentWinsCorrelationMin: 0.7,
+  /** ⚙ Tolérance plus large que `LEAGUE_TARGETS.injuriesPerTeamPerSeason` (même raison que les autres curseurs). */
+  injuriesPerTeamPerSeason: { min: 2.5, max: 8 },
 } as const;
 
 // ---------------------------------------------------------------------------

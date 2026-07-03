@@ -26,6 +26,8 @@ export interface SeasonMetrics {
   bestTeamWins: number;
   worstTeamWins: number;
   talentWinsCorrelation: number;
+  /** Blessures (événements INJURY) par équipe et par saison (plan-développement §Phase 2 — Session 2). */
+  injuriesPerTeamPerSeason: number;
 }
 
 /**
@@ -76,19 +78,24 @@ export class BatchAccumulator {
   private dreb = 0;
   private homeWins = 0;
   private totalGames = 0;
+  private totalInjuries = 0;
+  private seasonCount = 0;
   private readonly talentRatings: number[] = [];
   private readonly winsSamples: number[] = [];
   private readonly topScorerPpgPerSeason: number[] = [];
   private bestTeamWins = -Infinity;
   private worstTeamWins = Infinity;
   private readonly ratingByTeam: Map<string, number>;
+  private readonly teamCount: number;
 
   constructor(league: League) {
     this.ratingByTeam = new Map(league.teams.map((t) => [t.id, teamOverallRating(t)]));
+    this.teamCount = league.teams.length;
   }
 
   addSeason(season: SeasonResult): void {
     const pointsByPlayer = new Map<string, number>();
+    this.seasonCount++;
 
     for (const game of season.regularSeasonGames) {
       this.totalPoints += game.homeScore + game.awayScore;
@@ -97,7 +104,9 @@ export class BatchAccumulator {
       if (game.homeScore > game.awayScore) this.homeWins++;
 
       for (const event of game.events) {
-        if (event.t === "SHOT") {
+        if (event.t === "INJURY") {
+          this.totalInjuries++;
+        } else if (event.t === "SHOT") {
           this.fga++;
           if (event.shotType === "THREE") this.threePA++;
           if (event.result === "MAKE") {
@@ -142,6 +151,7 @@ export class BatchAccumulator {
       offensiveReboundShare: this.oreb / (this.oreb + this.dreb),
       homeWinPercent: this.homeWins / this.totalGames,
       topScorerPpg,
+      injuriesPerTeamPerSeason: this.totalInjuries / (this.seasonCount * this.teamCount),
       bestTeamWins: this.bestTeamWins,
       worstTeamWins: this.worstTeamWins,
       talentWinsCorrelation: pearsonCorrelation(this.talentRatings, this.winsSamples),

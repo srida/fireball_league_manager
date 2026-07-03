@@ -1,16 +1,30 @@
 /**
  * Boucle de match complète (spec-possession-algorithm.md §1, §10 ; plan-développement
- * §Phase 2 — Session 1). P2 : rotations réelles — la hiérarchie du roster et les
+ * §Phase 2 — Sessions 1 et 2). Rotations réelles — la hiérarchie du roster et les
  * minutes cibles pilotent un moteur de substitutions automatique vérifié après
  * chaque possession, avec gestion des 6 fautes personnelles (foul-out immédiat).
+ * Session 2 : fatigue intra-match (`gameStamina`, drainée/récupérée à chaque
+ * possession) et blessures probabilistes (sortie forcée définitive, comme le
+ * foul-out) — la persistance inter-matchs (fitness, durée d'indisponibilité)
+ * est de la responsabilité de l'appelant (season.ts), ce module reste pur.
  * Un match est une suite de possessions alternées jusqu'à la fin du temps
  * réglementaire ou d'une prolongation (spec §1).
  */
 import { PACE } from "../config/tuning.js";
+import { applyFatigueDrain, checkInjuries } from "./fatigue.js";
 import { resolvePossession } from "./possession.js";
 import { buildRotationPlan, createGameRotationState, decideSubstitutions, playerRating } from "./rotation.js";
 import type { RNG } from "../utils/rng.js";
-import type { Game, GameState, OnCourtPlayer, Player, Position, TeamSide, TeamTactics } from "../types/index.js";
+import type {
+  Game,
+  GameState,
+  InjurySeverity,
+  OnCourtPlayer,
+  Player,
+  Position,
+  TeamSide,
+  TeamTactics,
+} from "../types/index.js";
 
 const STARTING_FIVE_POSITIONS: readonly Position[] = ["PG", "SG", "SF", "PF", "C"];
 
@@ -46,6 +60,13 @@ export interface SimulateGameOptions {
   awayRoster: readonly Player[];
   homeTactics: TeamTactics;
   awayTactics: TeamTactics;
+  /**
+   * gameStamina de départ par joueur (0-100), dérivée de la fitness saison
+   * (season.ts, plan P2 §Session 2). Un joueur absent de la map démarre à 100
+   * (défaut utilisé par les tests unitaires/propriétés, cohérent avec P1).
+   */
+  homeStartingFitness?: Readonly<Record<string, number>>;
+  awayStartingFitness?: Readonly<Record<string, number>>;
 }
 
 export interface SimulatedGame {
@@ -58,6 +79,8 @@ export interface SimulatedGame {
   participants: Record<TeamSide, Player[]>;
   /** Minutes réellement jouées par chaque joueur (dérivées des substitutions, spec §Session 1). */
   minutesPlayed: Record<string, number>;
+  /** Blessures survenues pendant ce match (plan P2 §Session 2), à répercuter sur la saison par l'appelant. */
+  injuries: { playerId: string; side: TeamSide; severity: InjurySeverity; gamesOut: number }[];
 }
 
 /** Simule un match complet, possession par possession, jusqu'à la fin du temps réglementaire ou des prolongations. */
@@ -79,6 +102,10 @@ export function simulateGame(rng: RNG, options: SimulateGameOptions): SimulatedG
     events: [],
   };
 
+  const gameStamina: Record<string, number> = {};
+  for (const p of options.homeRoster) gameStamina[p.id] = options.homeStartingFitness?.[p.id] ?? 100;
+  for (const p of options.awayRoster) gameStamina[p.id] = options.awayStartingFitness?.[p.id] ?? 100;
+
   let state: GameState = {
     game,
     clockSeconds: PACE.quarterDurationSeconds,
@@ -92,8 +119,13 @@ export function simulateGame(rng: RNG, options: SimulateGameOptions): SimulatedG
       HOME: createGameRotationState(buildRotationPlan(options.homeRoster)),
       AWAY: createGameRotationState(buildRotationPlan(options.awayRoster)),
     },
+    gameStamina,
+    injuries: {},
     context: { homeTeamId: options.homeTeamId, awayTeamId: options.awayTeamId },
   };
+
+  const rosterBySide = { HOME: options.homeRoster, AWAY: options.awayRoster } as const;
+  const injuries: SimulatedGame["injuries"] = [];
 
   const possessionCount: Record<TeamSide, number> = { HOME: 0, AWAY: 0 };
   const participantIds: Record<TeamSide, Set<string>> = { HOME: new Set(), AWAY: new Set() };
@@ -107,6 +139,7 @@ export function simulateGame(rng: RNG, options: SimulateGameOptions): SimulatedG
         cumulative[oc.player.id] = (cumulative[oc.player.id] ?? 0) + clockUsed;
       }
     }
+    applyFatigueDrain(state, rosterBySide, clockUsed);
   }
 
   function applySubstitutions(clock: number): void {
@@ -144,6 +177,16 @@ export function simulateGame(rng: RNG, options: SimulateGameOptions): SimulatedG
         possession: result.nextPossession,
         personalFouls,
       };
+
+      const injuryCheck = checkInjuries(state, rng, nextClock);
+      if (injuryCheck.events.length > 0) {
+        game.events.push(...injuryCheck.events);
+        for (const [playerId, injury] of Object.entries(injuryCheck.newInjuries)) {
+          const side: TeamSide = homeRosterById.has(playerId) ? "HOME" : "AWAY";
+          injuries.push({ playerId, side, severity: injury.severity, gamesOut: injury.gamesOut });
+        }
+        state = { ...state, injuries: { ...state.injuries, ...injuryCheck.newInjuries } };
+      }
 
       applySubstitutions(nextClock);
     }
@@ -191,5 +234,6 @@ export function simulateGame(rng: RNG, options: SimulateGameOptions): SimulatedG
     startingFive: { HOME: homeFive, AWAY: awayFive },
     participants,
     minutesPlayed,
+    injuries,
   };
 }

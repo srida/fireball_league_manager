@@ -84,6 +84,7 @@ function isInFoulTrouble(fouls: number, quarter: number): boolean {
 
 function isEligible(playerId: string, state: GameState, side: TeamSide, onCourtIds: ReadonlySet<string>): boolean {
   if (onCourtIds.has(playerId)) return false;
+  if (playerId in state.injuries) return false;
   if ((state.personalFouls[playerId] ?? 0) >= ROTATION.foulOutLimit) return false;
   const benchedUntil = state.rotation[side].benchedUntilQuarter[playerId];
   if (benchedUntil !== undefined && state.quarter < benchedUntil) return false;
@@ -121,8 +122,9 @@ export interface SubstitutionOutcome {
 
 /**
  * Décide et applique les changements d'une équipe après une possession, par
- * ordre de priorité : foul-out (6 fautes, toujours immédiat) > foul trouble
- * (mise au repos temporaire) > rythme de minutes cible (hors prolongation).
+ * ordre de priorité : blessure (toujours immédiat, plan P2 §Session 2) >
+ * foul-out (6 fautes, toujours immédiat) > foul trouble (mise au repos
+ * temporaire) > rythme de minutes cible (hors prolongation).
  */
 export function decideSubstitutions(
   state: GameState,
@@ -144,7 +146,9 @@ export function decideSubstitutions(
     const fouls = state.personalFouls[playerId] ?? 0;
 
     let mustSitOut = false;
-    if (fouls >= ROTATION.foulOutLimit) {
+    if (playerId in state.injuries) {
+      mustSitOut = true;
+    } else if (fouls >= ROTATION.foulOutLimit) {
       mustSitOut = true;
     } else if (isInFoulTrouble(fouls, state.quarter) && rotationState.benchedUntilQuarter[playerId] === undefined) {
       rotationState.benchedUntilQuarter[playerId] = state.quarter + 1;

@@ -94,6 +94,12 @@ function report(metrics: SeasonMetrics, seasons: number, elapsedMs: number): voi
       cible: "> 0.7",
       ok: metrics.talentWinsCorrelation > 0.7 ? "OK" : "HORS CIBLE",
     },
+    {
+      métrique: "Blessures/équipe/saison",
+      valeur: metrics.injuriesPerTeamPerSeason.toFixed(1),
+      cible: `${LEAGUE_TARGETS.injuriesPerTeamPerSeason.min}-${LEAGUE_TARGETS.injuriesPerTeamPerSeason.max}`,
+      ok: inRange(metrics.injuriesPerTeamPerSeason, LEAGUE_TARGETS.injuriesPerTeamPerSeason) ? "OK" : "HORS CIBLE",
+    },
   ];
 
   console.log(`\nBatch : ${seasons} saison(s) simulée(s) en ${(elapsedMs / 1000).toFixed(1)}s (${(elapsedMs / seasons / 1000).toFixed(1)}s/saison)\n`);

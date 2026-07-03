@@ -36,8 +36,11 @@ describe("simulateGame — horloge et structure de match (spec-tests-phase1 §1)
   it("score égal à la fin du temps réglementaire → prolongation (répétable jusqu'à décision)", () => {
     // Sur un échantillon de seeds, au moins une prolongation doit apparaître
     // (quarter > 4) ET aucun match ne doit se terminer sur une égalité.
+    // Échantillon élargi à 200 (spec plan P2 §Session 2) : la fatigue de fin de
+    // match a fait baisser le taux de prolongation observé (~2.7 % sur 300
+    // matchs échantillonnés) au point qu'un tirage de 60 tombait parfois sur 0.
     let sawOvertime = false;
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 200; i++) {
       const { home, away } = twoTeams(`ot-search-${i}`);
       const rng = createRng(`ot-search-sim-${i}`);
       const { game } = simulateGame(rng, simOptions(`g-${i}`, home, away));
@@ -148,6 +151,38 @@ describe("simulateGame — rotations et fautes (plan-développement §Phase 2 Se
     }
     // 10 joueurs (5+5) minimum si aucune rotation ; on attend nettement plus sur 5 matchs.
     expect(distinctPlayersSeen.size).toBeGreaterThan(10);
+  });
+});
+
+describe("simulateGame — fatigue et blessures (plan-développement §Phase 2 Session 2)", () => {
+  it("un joueur blessé ne réapparaît plus jamais dans le log après son événement INJURY (au moins une blessure sur l'échantillon)", () => {
+    let sawInjury = false;
+
+    for (let i = 0; i < 60; i++) {
+      const { home, away } = twoTeams(`injury-case-${i}`);
+      const rng = createRng(`injury-sim-${i}`);
+      const { game, injuries } = simulateGame(rng, simOptions(`g-injury-${i}`, home, away));
+
+      if (injuries.length > 0) sawInjury = true;
+
+      const injuredIds = new Set(injuries.map((inj) => inj.playerId));
+      const injuredSoFar = new Set<string>();
+
+      for (const event of game.events) {
+        if ("player" in event && injuredSoFar.has(event.player) && event.t !== "INJURY") {
+          throw new Error(`joueur ${event.player} blessé encore référencé par un événement ${event.t}`);
+        }
+        if (event.t === "INJURY") {
+          expect(injuredIds.has(event.player)).toBe(true);
+          injuredSoFar.add(event.player);
+        }
+        if (event.t === "SUB") {
+          expect(injuredSoFar.has(event.in)).toBe(false);
+        }
+      }
+    }
+
+    expect(sawInjury).toBe(true);
   });
 });
 
