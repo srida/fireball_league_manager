@@ -1,5 +1,27 @@
 import type { Player } from "./player.js";
 
+/** Rythme de jeu voulu par le staff (spec-tests-phase1 / plan P2 §Session 1). */
+export type Pace = "SLOW" | "NORMAL" | "FAST";
+
+/** Orientation offensive : où l'équipe cherche à générer ses tirs. */
+export type OffensiveOrientation = "THREE_POINT" | "BALANCED" | "INSIDE";
+
+/** Agressivité défensive : intensité du contact et des prises de risque en défense. */
+export type DefensiveAggressiveness = "LOW" | "NORMAL" | "HIGH";
+
+/**
+ * Profil tactique d'équipe (P2, plan-développement §Phase 2). Modifie les poids
+ * du choix d'action et la consommation d'horloge (constantes dans tuning.ts),
+ * jamais de logique dispersée dans le moteur.
+ */
+export interface TeamTactics {
+  pace: Pace;
+  offensiveOrientation: OffensiveOrientation;
+  defensiveAggressiveness: DefensiveAggressiveness;
+  /** Pressing tout terrain : accentue l'agressivité défensive (turnovers forcés, fautes). */
+  pressing: boolean;
+}
+
 export interface Team {
   id: string;
   name: string; // nom fictif FBL
@@ -8,6 +30,8 @@ export interface Team {
   conference: string;
   division: string;
   roster: Player[]; // 15 joueurs en P1
+  /** Profil tactique (P2). Assigné à la génération de la ligue selon la composition du roster. */
+  tactics: TeamTactics;
 }
 
 export interface Division {

@@ -6,7 +6,8 @@
  */
 import { createRng, type RNG } from "../utils/rng.js";
 import { generatePlayer } from "../generation/player.js";
-import type { GameState, OnCourtPlayer, Player, Position, TeamSide } from "../types/index.js";
+import { buildRotationPlan, createGameRotationState } from "./rotation.js";
+import type { GameState, OnCourtPlayer, Player, Position, TeamSide, TeamTactics } from "../types/index.js";
 
 /**
  * RNG scriptable : chaque méthode consomme une valeur programmée dans une file
@@ -110,6 +111,14 @@ export function toOnCourt(player: Player): OnCourtPlayer {
   return { player, effective: { ...player.physical, ...player.skills } };
 }
 
+/** Profil tactique neutre par défaut pour les tests qui ne portent pas sur les tactiques. */
+export const NEUTRAL_TACTICS: TeamTactics = {
+  pace: "NORMAL",
+  offensiveOrientation: "BALANCED",
+  defensiveAggressiveness: "NORMAL",
+  pressing: false,
+};
+
 export function makeGameState(homeFive: Player[], awayFive: Player[], overrides?: Partial<GameState>): GameState {
   return {
     game: {
@@ -125,8 +134,14 @@ export function makeGameState(homeFive: Player[], awayFive: Player[], overrides?
     clockSeconds: 720,
     quarter: 1,
     teamFouls: { HOME: 0, AWAY: 0 },
+    personalFouls: {},
     possession: "HOME" as TeamSide,
     onCourt: { HOME: homeFive.map(toOnCourt), AWAY: awayFive.map(toOnCourt) },
+    tactics: { HOME: NEUTRAL_TACTICS, AWAY: NEUTRAL_TACTICS },
+    rotation: {
+      HOME: createGameRotationState(buildRotationPlan(homeFive)),
+      AWAY: createGameRotationState(buildRotationPlan(awayFive)),
+    },
     context: { homeTeamId: "home", awayTeamId: "away" },
     ...overrides,
   };

@@ -36,6 +36,8 @@ function playRealGame(rng: RNG, teamById: Map<string, Team>) {
       awayTeamId,
       homeRoster: home.roster,
       awayRoster: away.roster,
+      homeTactics: home.tactics,
+      awayTactics: away.tactics,
     });
     return { homeScore: game.homeScore, awayScore: game.awayScore, events: game.events };
   };

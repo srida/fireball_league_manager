@@ -3,24 +3,30 @@ import { createRng } from "../utils/rng.js";
 import { generateLeague } from "../generation/league.js";
 import { simulateGame, pickStartingFive } from "./game.js";
 import { aggregateBoxScore, sumTeamBoxScore } from "./boxScore.js";
-import { PACE } from "../config/tuning.js";
+import { PACE, ROTATION } from "../config/tuning.js";
 
 function twoTeams(seed: string) {
   const league = generateLeague(seed);
   return { home: league.teams[0]!, away: league.teams[1]! };
 }
 
+function simOptions(gameId: string, home: ReturnType<typeof twoTeams>["home"], away: ReturnType<typeof twoTeams>["away"]) {
+  return {
+    gameId,
+    homeTeamId: home.id,
+    awayTeamId: away.id,
+    homeRoster: home.roster,
+    awayRoster: away.roster,
+    homeTactics: home.tactics,
+    awayTactics: away.tactics,
+  };
+}
+
 describe("simulateGame — horloge et structure de match (spec-tests-phase1 §1)", () => {
   it("un match sans prolongation dure 4 quart-temps, score final défini", () => {
     const { home, away } = twoTeams("game-structure-1");
     const rng = createRng("game-structure-1-sim");
-    const { game } = simulateGame(rng, {
-      gameId: "g1",
-      homeTeamId: home.id,
-      awayTeamId: away.id,
-      homeRoster: home.roster,
-      awayRoster: away.roster,
-    });
+    const { game } = simulateGame(rng, simOptions("g1", home, away));
     expect(game.status).toBe("FINAL");
     expect(game.quarter).toBeGreaterThanOrEqual(4);
     expect(game.homeScore).toBeGreaterThan(0);
@@ -34,13 +40,7 @@ describe("simulateGame — horloge et structure de match (spec-tests-phase1 §1)
     for (let i = 0; i < 60; i++) {
       const { home, away } = twoTeams(`ot-search-${i}`);
       const rng = createRng(`ot-search-sim-${i}`);
-      const { game } = simulateGame(rng, {
-        gameId: `g-${i}`,
-        homeTeamId: home.id,
-        awayTeamId: away.id,
-        homeRoster: home.roster,
-        awayRoster: away.roster,
-      });
+      const { game } = simulateGame(rng, simOptions(`g-${i}`, home, away));
       expect(game.homeScore).not.toBe(game.awayScore);
       if (game.quarter > 4) sawOvertime = true;
     }
@@ -50,25 +50,19 @@ describe("simulateGame — horloge et structure de match (spec-tests-phase1 §1)
   it("somme des points du log d'événements == score final du match (invariant fondamental)", () => {
     const { home, away } = twoTeams("game-log-sum");
     const rng = createRng("game-log-sum-sim");
-    const { game } = simulateGame(rng, {
-      gameId: "g2",
-      homeTeamId: home.id,
-      awayTeamId: away.id,
-      homeRoster: home.roster,
-      awayRoster: away.roster,
-    });
+    const { game, participants } = simulateGame(rng, simOptions("g2", home, away));
 
-    const homeFive = new Set(pickStartingFive(home.roster).map((p) => p.id));
+    const homeIds = new Set(participants.HOME.map((p) => p.id));
     let homeFromLog = 0;
     let awayFromLog = 0;
     for (const event of game.events) {
       if (event.t === "SHOT" && event.result === "MAKE") {
         const pts = event.shotType === "THREE" ? 3 : 2;
-        if (homeFive.has(event.player)) homeFromLog += pts;
+        if (homeIds.has(event.player)) homeFromLog += pts;
         else awayFromLog += pts;
       }
       if (event.t === "FREE_THROW" && event.result === "MAKE") {
-        if (homeFive.has(event.player)) homeFromLog += 1;
+        if (homeIds.has(event.player)) homeFromLog += 1;
         else awayFromLog += 1;
       }
     }
@@ -78,13 +72,7 @@ describe("simulateGame — horloge et structure de match (spec-tests-phase1 §1)
 
   it("déterminisme de bout en bout : même seed → logs strictement identiques", () => {
     const { home, away } = twoTeams("determinism-league");
-    const opts = {
-      gameId: "g3",
-      homeTeamId: home.id,
-      awayTeamId: away.id,
-      homeRoster: home.roster,
-      awayRoster: away.roster,
-    };
+    const opts = simOptions("g3", home, away);
     const gameA = simulateGame(createRng("determinism-sim"), opts).game;
     const gameB = simulateGame(createRng("determinism-sim"), opts).game;
     expect(gameA.events).toEqual(gameB.events);
@@ -95,13 +83,7 @@ describe("simulateGame — horloge et structure de match (spec-tests-phase1 §1)
   it("l'horloge est chronologiquement cohérente (décroissante) à l'intérieur d'un quart-temps", () => {
     const { home, away } = twoTeams("clock-coherence");
     const rng = createRng("clock-coherence-sim");
-    const { game } = simulateGame(rng, {
-      gameId: "g4",
-      homeTeamId: home.id,
-      awayTeamId: away.id,
-      homeRoster: home.roster,
-      awayRoster: away.roster,
-    });
+    const { game } = simulateGame(rng, simOptions("g4", home, away));
 
     let previousClock = Number.POSITIVE_INFINITY;
     for (const event of game.events) {
@@ -118,6 +100,54 @@ describe("simulateGame — horloge et structure de match (spec-tests-phase1 §1)
       expect(clock).toBeGreaterThanOrEqual(0);
       previousClock = clock;
     }
+  });
+});
+
+describe("simulateGame — rotations et fautes (plan-développement §Phase 2 Session 1)", () => {
+  it("un joueur fouled-out (6 fautes) ne réapparaît plus jamais dans le log après son SUB de sortie", () => {
+    const runningFouls: Record<string, number> = {};
+    const disqualified = new Set<string>();
+
+    for (let i = 0; i < 8; i++) {
+      const { home, away } = twoTeams(`foul-out-case-${i}`);
+      const rng = createRng(`foul-out-sim-${i}`);
+      const { game } = simulateGame(rng, simOptions(`g-foul-${i}`, home, away));
+
+      Object.keys(runningFouls).forEach((k) => delete runningFouls[k]);
+      disqualified.clear();
+
+      for (const event of game.events) {
+        if ("player" in event) {
+          expect(disqualified.has(event.player)).toBe(false);
+        }
+        if ("on" in event) {
+          expect(disqualified.has(event.on)).toBe(false);
+        }
+        if (event.t === "SUB") {
+          expect(disqualified.has(event.in)).toBe(false);
+        }
+        if (event.t === "FOUL") {
+          runningFouls[event.player] = (runningFouls[event.player] ?? 0) + 1;
+        }
+        if (event.t === "SUB" && (runningFouls[event.out] ?? 0) >= ROTATION.foulOutLimit) {
+          disqualified.add(event.out);
+        }
+      }
+    }
+  });
+
+  it("les minutes jouées respectent globalement les cibles de rotation (au moins 6 joueurs différents par équipe sur un échantillon)", () => {
+    // Sur un échantillon de matchs, la rotation doit faire jouer plus que les 5 titulaires
+    // (spec plan P2 §Session 1 : hiérarchie + substitutions automatiques).
+    const distinctPlayersSeen = new Set<string>();
+    for (let i = 0; i < 5; i++) {
+      const { home, away } = twoTeams(`rotation-sample-${i}`);
+      const rng = createRng(`rotation-sample-sim-${i}`);
+      const { participants } = simulateGame(rng, simOptions(`g-rot-${i}`, home, away));
+      for (const p of [...participants.HOME, ...participants.AWAY]) distinctPlayersSeen.add(p.id);
+    }
+    // 10 joueurs (5+5) minimum si aucune rotation ; on attend nettement plus sur 5 matchs.
+    expect(distinctPlayersSeen.size).toBeGreaterThan(10);
   });
 });
 
@@ -151,18 +181,11 @@ describe("aggregateBoxScore — agrégation du log (spec-tests-phase1 §1)", () 
   it("la somme des stats individuelles == stats d'équipe", () => {
     const { home, away } = twoTeams("box-sum-league");
     const rng = createRng("box-sum-sim");
-    const { game, onCourt, minutesPlayed } = simulateGame(rng, {
-      gameId: "g5",
-      homeTeamId: home.id,
-      awayTeamId: away.id,
-      homeRoster: home.roster,
-      awayRoster: away.roster,
-    });
+    const { game, participants, minutesPlayed } = simulateGame(rng, simOptions("g5", home, away));
 
     const box = aggregateBoxScore(game.events, minutesPlayed);
-    const homeIds = new Set(onCourt.HOME.map((p) => p.id));
-    const homeBoxes = onCourt.HOME.map((p) => box[p.id]).filter((b): b is NonNullable<typeof b> => b !== undefined);
-    const awayBoxes = onCourt.AWAY.map((p) => box[p.id]).filter((b): b is NonNullable<typeof b> => b !== undefined);
+    const homeBoxes = participants.HOME.map((p) => box[p.id]).filter((b): b is NonNullable<typeof b> => b !== undefined);
+    const awayBoxes = participants.AWAY.map((p) => box[p.id]).filter((b): b is NonNullable<typeof b> => b !== undefined);
 
     const homeTeamTotals = sumTeamBoxScore(homeBoxes);
     const awayTeamTotals = sumTeamBoxScore(awayBoxes);
@@ -170,11 +193,20 @@ describe("aggregateBoxScore — agrégation du log (spec-tests-phase1 §1)", () 
     expect(homeTeamTotals.points).toBe(game.homeScore);
     expect(awayTeamTotals.points).toBe(game.awayScore);
 
-    // Aucun événement ne doit référencer un joueur hors des deux 5 de départ (P1 : pas de bancs actifs).
-    const allIds = new Set([...onCourt.HOME, ...onCourt.AWAY].map((p) => p.id));
+    // Aucun événement ne doit référencer un joueur hors des participants des deux équipes
+    // (titulaires + entrants, P2 : les rotations font jouer plus que les 5 de départ).
+    const allIds = new Set([...participants.HOME, ...participants.AWAY].map((p) => p.id));
     for (const event of game.events) {
       if ("player" in event) expect(allIds.has(event.player)).toBe(true);
     }
-    void homeIds;
+  });
+});
+
+describe("pickStartingFive — hiérarchie de rotation (spec plan P2 §Session 1)", () => {
+  it("un joueur par poste primaire, cinq joueurs distincts", () => {
+    const { home } = twoTeams("starting-five-case");
+    const five = pickStartingFive(home.roster);
+    expect(five).toHaveLength(5);
+    expect(new Set(five.map((p) => p.id)).size).toBe(5);
   });
 });

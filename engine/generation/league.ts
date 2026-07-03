@@ -6,6 +6,7 @@ import { CONFERENCES, DIVISIONS, TEAM_NICKNAMES } from "./names.js";
 import type { League, Team } from "../types/index.js";
 import type { RNG } from "../utils/rng.js";
 import { generateRoster } from "./roster.js";
+import { assignTacticsFromRoster } from "../simulation/tactics.js";
 
 function makeAbbreviation(city: string, nickname: string, used: Set<string>): string {
   const letters = (s: string) => s.replace(/[^A-Za-zÀ-ÿ]/g, "").toUpperCase();
@@ -46,6 +47,7 @@ export function generateLeague(seed: string | number): League {
     for (let i = 0; i < LEAGUE_GENERATION.teamsPerDivision; i++) {
       const city = cities[i] as string;
       const nickname = nicknames[index] as string;
+      const roster = generateRoster(rng);
       teams.push({
         id: generateId(rng),
         name: `${city} ${nickname}`,
@@ -53,7 +55,8 @@ export function generateLeague(seed: string | number): League {
         abbreviation: makeAbbreviation(city, nickname, usedAbbreviations),
         conference: division.conference,
         division: division.name,
-        roster: generateRoster(rng),
+        roster,
+        tactics: assignTacticsFromRoster(rng, roster),
       });
       index++;
     }

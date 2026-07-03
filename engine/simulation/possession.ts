@@ -17,6 +17,10 @@ import {
   REBOUND,
   SHOT_SELECTION,
   SHOT_SUCCESS,
+  TACTICS_DEFENSIVE_AGGRESSIVENESS,
+  TACTICS_OFFENSIVE_ORIENTATION_SHOT_BIAS,
+  TACTICS_PACE_CLOCK_MULTIPLIER,
+  TACTICS_PRESSING_MULTIPLIER,
   USAGE,
   gameStaminaFactor,
   pressureModifier,
@@ -29,6 +33,7 @@ import type {
   OnCourtPlayer,
   ShotType,
   TeamSide,
+  TeamTactics,
   TurnoverCause,
 } from "../types/index.js";
 
@@ -76,6 +81,7 @@ function chooseAction(
   defender: OnCourtPlayer,
   clockRemainingInPossession: number,
   passCount: number,
+  defenseTactics: TeamTactics,
   rng: RNG,
 ): ActionType {
   if (clockRemainingInPossession <= 0) return "SHOT";
@@ -95,14 +101,23 @@ function chooseAction(
     (1 + ACTION_MODIFIERS.passSkillWeight * (avg(cEff.courtVision, cEff.passing) - 75)) *
     Math.max(0, 1 - ACTION_MODIFIERS.passDecayPerPass * passCount);
 
+  // spec plan P2 §Session 1 : agressivité défensive / pressing pondèrent le turnover forcé et la faute subie.
+  const aggressiveness = TACTICS_DEFENSIVE_AGGRESSIVENESS[defenseTactics.defensiveAggressiveness];
+  const pressingTurnover = defenseTactics.pressing ? TACTICS_PRESSING_MULTIPLIER.turnoverForcedMultiplier : 1;
+  const pressingFoul = defenseTactics.pressing ? TACTICS_PRESSING_MULTIPLIER.foulMultiplier : 1;
+
   let pTurnover =
     ACTION_PROBABILITY.base.turnover *
     (1 - ACTION_MODIFIERS.turnoverHandlingWeight * (cEff.ballHandling - 75)) *
-    (1 + ACTION_MODIFIERS.turnoverDefenseStealWeight * (dEff.steal - 75));
+    (1 + ACTION_MODIFIERS.turnoverDefenseStealWeight * (dEff.steal - 75)) *
+    aggressiveness.turnoverForcedMultiplier *
+    pressingTurnover;
 
   let pFoul =
     ACTION_PROBABILITY.base.foulDrawn *
-    (1 + ACTION_MODIFIERS.foulDrawnAttackWeight * (avg(cEff.finishing, cEff.postPlay) - 75));
+    (1 + ACTION_MODIFIERS.foulDrawnAttackWeight * (avg(cEff.finishing, cEff.postPlay) - 75)) *
+    aggressiveness.foulMultiplier *
+    pressingFoul;
 
   pShot = Math.max(pShot, 0.001);
   pPass = Math.max(pPass, 0.001);
@@ -129,13 +144,20 @@ function chooseAction(
 }
 
 /** spec §5 — p(shotType) ∝ base × f(attribut), f convexe. `isPutback` : biais fort vers le cercle (§7). */
-function chooseShotType(shooter: OnCourtPlayer, rng: RNG, isPutback: boolean): ShotType {
+function chooseShotType(
+  shooter: OnCourtPlayer,
+  offenseTactics: TeamTactics,
+  rng: RNG,
+  isPutback: boolean,
+): ShotType {
   const eff = shooter.effective;
   const f = (attr: number) => Math.pow(Math.max(attr, 0) / 99, SHOT_SELECTION.convexityExponent);
+  // spec plan P2 §Session 1 : l'orientation offensive biaise la sélection du type de tir.
+  const bias = TACTICS_OFFENSIVE_ORIENTATION_SHOT_BIAS[offenseTactics.offensiveOrientation];
 
-  const pThree = SHOT_SELECTION.baseThree * f(eff.threePoint);
-  const pMid = SHOT_SELECTION.baseMidRange * f(eff.midRange);
-  let pRim = SHOT_SELECTION.baseRim * f(avg(eff.finishing, eff.speed, eff.postPlay));
+  const pThree = SHOT_SELECTION.baseThree * f(eff.threePoint) * bias.three;
+  const pMid = SHOT_SELECTION.baseMidRange * f(eff.midRange) * bias.midRange;
+  let pRim = SHOT_SELECTION.baseRim * f(avg(eff.finishing, eff.speed, eff.postPlay)) * bias.rim;
   if (isPutback) pRim *= PUTBACK.rimBiasMultiplier;
 
   return rng.weightedPick([
@@ -196,13 +218,14 @@ function resolveShot(
   defense: readonly OnCourtPlayer[],
   shooter: OnCourtPlayer,
   defender: OnCourtPlayer,
+  offenseTactics: TeamTactics,
   isHome: boolean,
   lastPasser: string | undefined,
   isPutback: boolean,
   clock: number,
   rng: RNG,
 ): ShotResolution {
-  const shotType = chooseShotType(shooter, rng, isPutback);
+  const shotType = chooseShotType(shooter, offenseTactics, rng, isPutback);
   const events: Event[] = [];
 
   // spec §6.2 — Contre, avant le tirage du tir, surtout au cercle.
@@ -376,13 +399,17 @@ export function resolvePossession(state: GameState, rng: RNG): PossessionResult 
   const offense = state.onCourt[offenseSide];
   const defense = state.onCourt[defenseSide];
   const isHome = offenseSide === "HOME";
+  const offenseTactics = state.tactics[offenseSide];
+  const defenseTactics = state.tactics[defenseSide];
+  // spec plan P2 §Session 1 : le pace de l'attaquant seul pilote la consommation d'horloge de sa possession.
+  const paceMultiplier = TACTICS_PACE_CLOCK_MULTIPLIER[offenseTactics.pace];
 
   const events: Event[] = [];
   let clockUsed = 0;
   let quarterClockRemaining = state.clockSeconds;
 
   const setupTime = Math.min(
-    rng.float(CLOCK_CONSUMPTION.setup.min, CLOCK_CONSUMPTION.setup.max),
+    rng.float(CLOCK_CONSUMPTION.setup.min, CLOCK_CONSUMPTION.setup.max) * paceMultiplier,
     quarterClockRemaining,
   );
   clockUsed += setupTime;
@@ -405,11 +432,13 @@ export function resolvePossession(state: GameState, rng: RNG): PossessionResult 
       const defender = matchDefender(carrier, defense);
 
       const forced = clockRemaining <= 0 || step === ACTION_PROBABILITY.maxPassesPerPossession;
-      const action: ActionType = forced ? "SHOT" : chooseAction(carrier, defender, clockRemaining, passCount, rng);
+      const action: ActionType = forced
+        ? "SHOT"
+        : chooseAction(carrier, defender, clockRemaining, passCount, defenseTactics, rng);
 
       if (action === "SHOT") {
         const creationTime = Math.min(
-          rng.float(CLOCK_CONSUMPTION.shotCreation.min, CLOCK_CONSUMPTION.shotCreation.max),
+          rng.float(CLOCK_CONSUMPTION.shotCreation.min, CLOCK_CONSUMPTION.shotCreation.max) * paceMultiplier,
           quarterClockRemaining,
         );
         clockUsed += creationTime;
@@ -420,6 +449,7 @@ export function resolvePossession(state: GameState, rng: RNG): PossessionResult 
           defense,
           carrier,
           defender,
+          offenseTactics,
           isHome,
           lastPasser,
           isPutback,
@@ -470,7 +500,7 @@ export function resolvePossession(state: GameState, rng: RNG): PossessionResult 
 
       // PASS
       const passTime = Math.min(
-        rng.float(CLOCK_CONSUMPTION.perPass.min, CLOCK_CONSUMPTION.perPass.max),
+        rng.float(CLOCK_CONSUMPTION.perPass.min, CLOCK_CONSUMPTION.perPass.max) * paceMultiplier,
         quarterClockRemaining,
       );
       clockUsed += passTime;

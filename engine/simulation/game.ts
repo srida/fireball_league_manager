@@ -1,27 +1,24 @@
 /**
- * Boucle de match complète (spec-possession-algorithm.md §1, §10).
- * P1 : pas de rotations — les 5 majeurs jouent l'intégralité du match (modèle
- * de minutes "naïf" : personne ne sort, minutes = durée totale du match).
+ * Boucle de match complète (spec-possession-algorithm.md §1, §10 ; plan-développement
+ * §Phase 2 — Session 1). P2 : rotations réelles — la hiérarchie du roster et les
+ * minutes cibles pilotent un moteur de substitutions automatique vérifié après
+ * chaque possession, avec gestion des 6 fautes personnelles (foul-out immédiat).
  * Un match est une suite de possessions alternées jusqu'à la fin du temps
  * réglementaire ou d'une prolongation (spec §1).
  */
 import { PACE } from "../config/tuning.js";
 import { resolvePossession } from "./possession.js";
+import { buildRotationPlan, createGameRotationState, decideSubstitutions, playerRating } from "./rotation.js";
 import type { RNG } from "../utils/rng.js";
-import type { Game, GameState, OnCourtPlayer, Player, Position, TeamSide } from "../types/index.js";
+import type { Game, GameState, OnCourtPlayer, Player, Position, TeamSide, TeamTactics } from "../types/index.js";
 
 const STARTING_FIVE_POSITIONS: readonly Position[] = ["PG", "SG", "SF", "PF", "C"];
 
-function playerRating(p: Player): number {
-  const skillAvg = Object.values(p.skills).reduce((a, b) => a + b, 0) / Object.keys(p.skills).length;
-  const physicalAvg = Object.values(p.physical).reduce((a, b) => a + b, 0) / Object.keys(p.physical).length;
-  return skillAvg * 0.7 + physicalAvg * 0.3;
-}
-
 /**
- * Sélection naïve du 5 de départ (P1, spec §10 : "pas de rotations, hiérarchie
- * du roster prévue en P2"). Un joueur par poste primaire, le mieux noté ; à
- * défaut de candidat au poste, le meilleur joueur restant du roster.
+ * Sélection du 5 de départ : un joueur par poste primaire, le mieux noté ; à
+ * défaut de candidat au poste, le meilleur joueur restant du roster. Reprend
+ * la hiérarchie de rotation (spec plan P2 §Session 1) pour rester cohérente
+ * avec les décisions de substitution en cours de match.
  */
 export function pickStartingFive(roster: readonly Player[]): Player[] {
   const used = new Set<string>();
@@ -37,7 +34,7 @@ export function pickStartingFive(roster: readonly Player[]): Player[] {
 }
 
 function toOnCourt(player: Player): OnCourtPlayer {
-  // P1 : seuls physical/skills sont actifs dans la simulation (spec-player-model §9).
+  // P1/P2 : seuls physical/skills sont actifs dans la simulation (spec-player-model §9).
   return { player, effective: { ...player.physical, ...player.skills } };
 }
 
@@ -47,15 +44,19 @@ export interface SimulateGameOptions {
   awayTeamId: string;
   homeRoster: readonly Player[];
   awayRoster: readonly Player[];
+  homeTactics: TeamTactics;
+  awayTactics: TeamTactics;
 }
 
 export interface SimulatedGame {
   game: Game;
   /** Nombre de possessions jouées par chaque équipe (invariant : égal à ±2 près). */
   possessionCount: Record<TeamSide, number>;
-  /** Les 5 joueurs sur le terrain de chaque équipe (P1 : inchangés tout le match). */
-  onCourt: Record<TeamSide, Player[]>;
-  /** Minutes jouées par chaque joueur sur le terrain (modèle naïf, spec §10). */
+  /** Les 5 joueurs qui ont débuté le match pour chaque équipe. */
+  startingFive: Record<TeamSide, Player[]>;
+  /** Tous les joueurs ayant foulé le parquet (titulaires + entrants, spec plan P2 §Session 1). */
+  participants: Record<TeamSide, Player[]>;
+  /** Minutes réellement jouées par chaque joueur (dérivées des substitutions, spec §Session 1). */
   minutesPlayed: Record<string, number>;
 }
 
@@ -63,6 +64,9 @@ export interface SimulatedGame {
 export function simulateGame(rng: RNG, options: SimulateGameOptions): SimulatedGame {
   const homeFive = pickStartingFive(options.homeRoster);
   const awayFive = pickStartingFive(options.awayRoster);
+
+  const homeRosterById = new Map(options.homeRoster.map((p) => [p.id, p]));
+  const awayRosterById = new Map(options.awayRoster.map((p) => [p.id, p]));
 
   const game: Game = {
     id: options.gameId,
@@ -80,12 +84,41 @@ export function simulateGame(rng: RNG, options: SimulateGameOptions): SimulatedG
     clockSeconds: PACE.quarterDurationSeconds,
     quarter: 1,
     teamFouls: { HOME: 0, AWAY: 0 },
+    personalFouls: {},
     possession: rng.bool(0.5) ? "HOME" : "AWAY",
     onCourt: { HOME: homeFive.map(toOnCourt), AWAY: awayFive.map(toOnCourt) },
+    tactics: { HOME: options.homeTactics, AWAY: options.awayTactics },
+    rotation: {
+      HOME: createGameRotationState(buildRotationPlan(options.homeRoster)),
+      AWAY: createGameRotationState(buildRotationPlan(options.awayRoster)),
+    },
     context: { homeTeamId: options.homeTeamId, awayTeamId: options.awayTeamId },
   };
 
   const possessionCount: Record<TeamSide, number> = { HOME: 0, AWAY: 0 };
+  const participantIds: Record<TeamSide, Set<string>> = { HOME: new Set(), AWAY: new Set() };
+  for (const p of homeFive) participantIds.HOME.add(p.id);
+  for (const p of awayFive) participantIds.AWAY.add(p.id);
+
+  function applyElapsedTime(clockUsed: number): void {
+    for (const side of ["HOME", "AWAY"] as const) {
+      const cumulative = state.rotation[side].cumulativeSeconds;
+      for (const oc of state.onCourt[side]) {
+        cumulative[oc.player.id] = (cumulative[oc.player.id] ?? 0) + clockUsed;
+      }
+    }
+  }
+
+  function applySubstitutions(clock: number): void {
+    const rostersBySide = { HOME: homeRosterById, AWAY: awayRosterById } as const;
+    for (const side of ["HOME", "AWAY"] as const) {
+      const outcome = decideSubstitutions(state, side, clock, rostersBySide[side]);
+      if (outcome.events.length === 0) continue;
+      game.events.push(...outcome.events);
+      for (const oc of outcome.onCourt) participantIds[side].add(oc.player.id);
+      state = { ...state, onCourt: { ...state.onCourt, [side]: outcome.onCourt } };
+    }
+  }
 
   while (true) {
     while (state.clockSeconds > 0) {
@@ -97,11 +130,22 @@ export function simulateGame(rng: RNG, options: SimulateGameOptions): SimulatedG
       if (offenseSide === "HOME") game.homeScore += result.points;
       else game.awayScore += result.points;
 
+      applyElapsedTime(result.clockUsed);
+
+      const personalFouls = { ...state.personalFouls };
+      for (const event of result.events) {
+        if (event.t === "FOUL") personalFouls[event.player] = (personalFouls[event.player] ?? 0) + 1;
+      }
+
+      const nextClock = Math.max(0, state.clockSeconds - result.clockUsed);
       state = {
         ...state,
-        clockSeconds: Math.max(0, state.clockSeconds - result.clockUsed),
+        clockSeconds: nextClock,
         possession: result.nextPossession,
+        personalFouls,
       };
+
+      applySubstitutions(nextClock);
     }
 
     const tied = game.homeScore === game.awayScore;
@@ -129,17 +173,23 @@ export function simulateGame(rng: RNG, options: SimulateGameOptions): SimulatedG
 
   game.status = "FINAL";
 
-  const totalGameSeconds =
-    PACE.quarterDurationSeconds * 4 + Math.max(0, game.quarter - 4) * PACE.overtimeDurationSeconds;
-  const starterMinutes = totalGameSeconds / 60;
-
   const minutesPlayed: Record<string, number> = {};
-  for (const p of [...homeFive, ...awayFive]) minutesPlayed[p.id] = starterMinutes;
+  for (const side of ["HOME", "AWAY"] as const) {
+    for (const [playerId, seconds] of Object.entries(state.rotation[side].cumulativeSeconds)) {
+      minutesPlayed[playerId] = seconds / 60;
+    }
+  }
+
+  const participants = {
+    HOME: [...participantIds.HOME].map((id) => homeRosterById.get(id)).filter((p): p is Player => p !== undefined),
+    AWAY: [...participantIds.AWAY].map((id) => awayRosterById.get(id)).filter((p): p is Player => p !== undefined),
+  };
 
   return {
     game,
     possessionCount,
-    onCourt: { HOME: homeFive, AWAY: awayFive },
+    startingFive: { HOME: homeFive, AWAY: awayFive },
+    participants,
     minutesPlayed,
   };
 }

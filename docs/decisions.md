@@ -181,3 +181,44 @@ joue les 48 minutes sans ralentissement ni ajustement défensif adverse
 tempèrent naturellement la domination d'un seul joueur. Même statut "warning"
 que la corrélation ci-dessus ; à réévaluer une fois fatigue/rotations actives.
 → `tests/statistical/league-distributions.test.ts`
+
+**Mise à jour Phase 2 Session 1 (rotations actives)** : l'hypothèse était
+partiellement correcte mais le gap s'est inversé plutôt que résorbé — le
+meilleur scoreur ligue est passé de ~35-37 pts/match (trop haut) à ~23-25
+pts/match (trop bas, cible 26-35). Les rotations réduisent les minutes des
+titulaires (~28-34 min réels au lieu de 48 min fixes en P1), ce qui réduit
+mécaniquement le volume de tirs disponible plus qu'un simple ralentissement
+défensif ne l'aurait fait. Reste en "warning" ; probablement à retempérer via
+`ROTATION.targetMinutesByRank` (titulaires vedettes un peu plus haut) ou via
+`USAGE`/`ACTION_PROBABILITY` une fois la pression/mental (Session 3) en place,
+plutôt qu'en touchant `attackFactorK` à nouveau.
+→ `engine/config/tuning.ts` (`ROTATION`), `engine/simulation/rotation.ts`
+
+## Phase 2 — Tactiques et rotations (Session 1)
+
+### Assignation tactique IA : seuils absolus abandonnés au profit d'une comparaison relative
+Première implémentation : orientation offensive (`THREE_POINT`/`BALANCED`/`INSIDE`)
+décidée par seuils absolus sur `threePoint` (guards/wings) vs moyenne
+`postPlay`+`strength` (intérieurs). Résultat : 23/30 équipes classées `INSIDE`
+et le batch de contrôle cassait la cible "part de tirs à 3pts" (32% vs 36-44%).
+Cause : `strength` est physique et élevé chez quasi tous les intérieurs
+indépendamment de leur identité offensive, donc le seuil absolu déclenchait
+presque toujours. **Décision** : comparaison relative `threePointAvg −
+postPlayAvg(intérieurs)` (retrait de `strength` du calcul) avec une marge
+(`TACTIC_ASSIGNMENT.offensiveOrientationMargin = 3`) — distribution obtenue sur
+la ligue de test : 11 `INSIDE` / 12 `BALANCED` / 7 `THREE_POINT`, cible 3pts
+revenue à ~40%.
+→ `engine/simulation/tactics.ts`, `engine/config/tuning.ts`
+
+### Rotations : garde-fou de "stint minimum" ajouté (non prévu explicitement par la spec)
+La logique de substitution sur rythme de minutes cibles (vérifiée à chaque
+possession, décision produit Session 1) oscillait violemment sans garde-fou :
+un joueur de banc à faible cible de minutes dépasse son rythme après ~2 min de
+jeu continu, produisant ~880 substitutions par match (vs ~30-40 réalistes) et
+un surcoût de performance (~57 ms/match contre ~18 ms après correctif).
+**Décision** : ajout de `ROTATION.minimumStintSeconds` (5 min) — un joueur ne
+peut être sorti pour rythme de minutes qu'après un passage minimum sur le
+terrain ; ne s'applique pas au foul-out (toujours immédiat) ni à la mise au
+repos pour fautes précoces. Ramène les substitutions à ~35-40/match des deux
+équipes cumulées.
+→ `engine/config/tuning.ts` (`ROTATION.minimumStintSeconds`), `engine/simulation/rotation.ts`

@@ -26,6 +26,8 @@ function simulateSample() {
       awayTeamId: away.id,
       homeRoster: home.roster,
       awayRoster: away.roster,
+      homeTactics: home.tactics,
+      awayTactics: away.tactics,
     });
     games.push(sim);
   }
@@ -56,11 +58,11 @@ describe(`Propriétés invariantes sur ${games.length} matchs seedés (spec-test
   });
 
   it("minutes d'équipe == 240 (ou 240 + 25 par prolongation)", () => {
-    for (const { game, onCourt, minutesPlayed } of games) {
+    for (const { game, participants, minutesPlayed } of games) {
       const overtimePeriods = Math.max(0, game.quarter - 4);
       const expectedTeamMinutes = 240 + overtimePeriods * 25;
-      const homeTeamMinutes = onCourt.HOME.reduce((sum, p) => sum + (minutesPlayed[p.id] ?? 0), 0);
-      const awayTeamMinutes = onCourt.AWAY.reduce((sum, p) => sum + (minutesPlayed[p.id] ?? 0), 0);
+      const homeTeamMinutes = participants.HOME.reduce((sum, p) => sum + (minutesPlayed[p.id] ?? 0), 0);
+      const awayTeamMinutes = participants.AWAY.reduce((sum, p) => sum + (minutesPlayed[p.id] ?? 0), 0);
       expect(homeTeamMinutes).toBeCloseTo(expectedTeamMinutes, 5);
       expect(awayTeamMinutes).toBeCloseTo(expectedTeamMinutes, 5);
     }
@@ -114,16 +116,18 @@ describe(`Propriétés invariantes sur ${games.length} matchs seedés (spec-test
       awayTeamId: away.id,
       homeRoster: home.roster,
       awayRoster: away.roster,
+      homeTactics: home.tactics,
+      awayTactics: away.tactics,
     };
     const a = simulateGame(createRng("determinism-property-seed"), opts);
     const b = simulateGame(createRng("determinism-property-seed"), opts);
     expect(a.game.events).toEqual(b.game.events);
   });
 
-  it("aucun événement ne référence un joueur hors des 5 sur le terrain de chaque équipe", () => {
+  it("aucun événement ne référence un joueur hors des participants de chaque équipe (titulaires + entrants)", () => {
     let unknownReferences = 0;
-    for (const { game, onCourt } of games) {
-      const ids = new Set([...onCourt.HOME, ...onCourt.AWAY].map((p) => p.id));
+    for (const { game, participants } of games) {
+      const ids = new Set([...participants.HOME, ...participants.AWAY].map((p) => p.id));
       for (const event of game.events) {
         if ("player" in event && !ids.has(event.player)) unknownReferences++;
         if ("on" in event && !ids.has(event.on)) unknownReferences++;

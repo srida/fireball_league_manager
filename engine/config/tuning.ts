@@ -1,4 +1,12 @@
-import type { ArchetypeId, Position, PlayerSkills, Trait } from "../types/index.js";
+import type {
+  ArchetypeId,
+  DefensiveAggressiveness,
+  OffensiveOrientation,
+  Pace,
+  Position,
+  PlayerSkills,
+  Trait,
+} from "../types/index.js";
 
 type SkillKey = keyof PlayerSkills;
 
@@ -224,6 +232,118 @@ export const CLOCK_CONSUMPTION = {
   perPass: { min: 2, max: 5 },
   /** ⚙ Création du tir, en secondes. */
   shotCreation: { min: 2, max: 6 },
+} as const;
+
+// ---------------------------------------------------------------------------
+// Tactiques d'équipe (P2, plan-développement §Phase 2 — Session 1)
+// ---------------------------------------------------------------------------
+
+/**
+ * ⚙ Pace : multiplie la consommation d'horloge de l'équipe qui attaque
+ * (mise en place, création de tir, chaque passe — spec-possession §8).
+ * Valeurs initiales — à calibrer via batch pour retomber sur ~99 possessions/équipe
+ * en moyenne ligue malgré la dispersion des profils.
+ */
+export const TACTICS_PACE_CLOCK_MULTIPLIER = {
+  SLOW: 1.15,
+  NORMAL: 1.0,
+  FAST: 0.85,
+} satisfies Record<Pace, number>;
+
+/**
+ * ⚙ Orientation offensive : biais multiplicatif sur les bases de sélection du
+ * type de tir (spec-possession §5, `SHOT_SELECTION`). Valeurs initiales — à calibrer
+ * pour produire des distributions de tirs visiblement différentes entre profils
+ * (cible de calibration P2, docs/plan-developpement).
+ */
+export const TACTICS_OFFENSIVE_ORIENTATION_SHOT_BIAS = {
+  THREE_POINT: { three: 1.35, midRange: 0.85, rim: 0.9 },
+  BALANCED: { three: 1.0, midRange: 1.0, rim: 1.0 },
+  INSIDE: { three: 0.7, midRange: 1.05, rim: 1.3 },
+} satisfies Record<OffensiveOrientation, { three: number; midRange: number; rim: number }>;
+
+/**
+ * ⚙ Agressivité défensive : multiplie le poids de turnover forcé (steal) et de
+ * faute subie côté attaque adverse (spec-possession §4). Valeurs initiales — à calibrer.
+ */
+export const TACTICS_DEFENSIVE_AGGRESSIVENESS = {
+  LOW: { turnoverForcedMultiplier: 0.85, foulMultiplier: 0.85 },
+  NORMAL: { turnoverForcedMultiplier: 1.0, foulMultiplier: 1.0 },
+  HIGH: { turnoverForcedMultiplier: 1.25, foulMultiplier: 1.2 },
+} satisfies Record<DefensiveAggressiveness, { turnoverForcedMultiplier: number; foulMultiplier: number }>;
+
+/**
+ * ⚙ Pressing tout terrain : multiplicateur supplémentaire (au-dessus de
+ * `TACTICS_DEFENSIVE_AGGRESSIVENESS`) sur le turnover forcé et la faute subie
+ * quand `pressing = true`. Valeur initiale — à calibrer.
+ */
+export const TACTICS_PRESSING_MULTIPLIER = {
+  turnoverForcedMultiplier: 1.15,
+  foulMultiplier: 1.1,
+} as const;
+
+// ---------------------------------------------------------------------------
+// Rotations et fautes personnelles (P2, plan-développement §Phase 2 — Session 1)
+// ---------------------------------------------------------------------------
+
+export const ROTATION = {
+  /** ⚙ Taille de la hiérarchie de rotation (titulaires + banc utilisé), sur un roster de 15. */
+  rotationSize: 9,
+  /**
+   * ⚙ Minutes cibles sur 48 min réglementaires, par rang de hiérarchie
+   * (rang 1 = meilleur titulaire). Les rangs au-delà de `targetMinutesByRank.length`
+   * (fin de banc) reçoivent une cible de 0 — ils ne jouent qu'en cas de blessure (P2, session suivante).
+   * Valeurs initiales — à calibrer.
+   */
+  targetMinutesByRank: [34, 32, 30, 28, 26, 22, 18, 14, 10],
+  /** ⚙ Nombre de fautes personnelles entraînant la sortie définitive du match. */
+  foulOutLimit: 6,
+  /**
+   * ⚙ Fautes personnelles au-delà desquelles un joueur est mis au repos temporaire
+   * ("foul trouble"), indexé par quart-temps (index 0 = Q1, 1 = Q2, 2 = Q3).
+   * Au Q4 et en prolongation, plus de mise au repos préventive (seul le foul-out
+   * s'applique) — un entraîneur laisse jouer ses meilleurs joueurs en money time.
+   */
+  foulTroubleThresholdByQuarter: [2, 3, 4],
+  /**
+   * ⚙ Tolérance (en secondes) avant qu'un joueur en avance sur son rythme de
+   * minutes cible ne soit sorti par la logique de rotation. Évite des allers-retours
+   * incessants pour de petits écarts.
+   */
+  paceToleranceSeconds: 90,
+  /**
+   * ⚙ Durée minimale d'un passage sur le terrain (en secondes) avant que la
+   * logique de rythme de minutes ne puisse sortir un joueur (garde-fou anti-oscillation :
+   * sans ce plancher, un joueur de banc à faible cible de minutes est resorti
+   * après ~2 min de jeu, produisant des dizaines de changements artificiels par
+   * match). Ne s'applique pas au foul-out (toujours immédiat) ni au foul trouble.
+   */
+  minimumStintSeconds: 300,
+} as const;
+
+/**
+ * ⚙ Règles d'assignation tactique des 29 IA depuis la composition de leur roster
+ * (spec plan P2 §Session 1 : "IA tactique basique... profil choisi selon la
+ * composition de leur roster"). Moyennes calculées sur les joueurs du roster
+ * aux postes concernés ; au-dessus du seuil → profil correspondant, sinon `BALANCED`/`NORMAL`.
+ * Valeurs initiales — à calibrer.
+ */
+export const TACTIC_ASSIGNMENT = {
+  /**
+   * ⚙ Écart minimal (points d'attribut) entre le profil tir extérieur et le profil
+   * jeu intérieur du roster pour sortir du profil `BALANCED` (comparaison relative,
+   * pas de seuil absolu — un seuil absolu sur `postPlay`/`strength` classait
+   * systématiquement 23/30 équipes en `INSIDE`, `strength` étant élevé chez tous
+   * les intérieurs indépendamment de leur identité offensive réelle).
+   */
+  offensiveOrientationMargin: 3,
+  aggressiveDefenseThreshold: 68,
+  passiveDefenseThreshold: 55,
+  pressingStaminaThreshold: 72,
+  fastPaceThreshold: 70,
+  slowPaceThreshold: 55,
+  /** ⚙ Tirage "hors-profil" (mirroir de `offArchetypeRate`) : un peu de variété entre équipes à composition proche. */
+  offProfileRate: 0.12,
 } as const;
 
 // ---------------------------------------------------------------------------
