@@ -58,11 +58,18 @@ export const USAGE = {
 // §4 — Choix d'action du porteur (spec-possession-algorithm.md)
 // ---------------------------------------------------------------------------
 export const ACTION_PROBABILITY = {
-  /** ⚙ Probabilités de base avant modificateurs. Somme = 1. */
+  /**
+   * ⚙ Probabilités de base avant modificateurs, par décision (un tirage possible
+   * à chaque étape [CHOIX D'ACTION], pas juste une fois par possession — spec §4).
+   * Calibré (batch/calibrate, docs/decisions.md "Calibration Session D") pour
+   * qu'une possession complète (souvent plusieurs décisions via les passes)
+   * atterrisse sur un taux de turnover global ~12-15 % (cible ligue), pas 9 %.
+   * Somme = 1.
+   */
   base: {
-    shot: 0.38,
-    pass: 0.45,
-    turnover: 0.09,
+    shot: 0.39,
+    pass: 0.465,
+    turnover: 0.062,
     foulDrawn: 0.08,
   },
   /** ⚙ Nombre maximum de passes par possession avant résolution forcée. */
@@ -72,13 +79,38 @@ export const ACTION_PROBABILITY = {
 } as const;
 
 // ---------------------------------------------------------------------------
+// §4 — Modificateurs du choix d'action (spec-possession-algorithm.md, tableau §4)
+// ---------------------------------------------------------------------------
+export const ACTION_MODIFIERS = {
+  /** ⚙ Poids du différentiel (tir attaquant − défense adverse) dans p(tir). Valeur initiale — à calibrer. */
+  shotSkillDeltaWeight: 0.006,
+  /** ⚙ Poids courtVision/passing dans p(passe). Valeur initiale — à calibrer. */
+  passSkillWeight: 0.004,
+  /** ⚙ Malus de p(passe) par passe déjà effectuée dans la possession. Valeur initiale — à calibrer. */
+  passDecayPerPass: 0.06,
+  /** ⚙ Poids ballHandling/discipline (réduction) dans p(turnover). Valeur initiale — à calibrer. */
+  turnoverHandlingWeight: 0.003,
+  /** ⚙ Poids du steal du défenseur (augmentation) dans p(turnover). Valeur initiale — à calibrer. */
+  turnoverDefenseStealWeight: 0.0025,
+  /** ⚙ Poids finishing/postPlay (attaque du cercle) dans p(faute subie). Valeur initiale — à calibrer. */
+  foulDrawnAttackWeight: 0.003,
+  /**
+   * ⚙ Poids de base de la cause "OFFENSIVE_FOUL" dans le tirage du turnover.
+   * `discipline` (mental) n'étant actif qu'en P2, ce poids reste une constante
+   * jusqu'à son remplacement par un modificateur basé sur `discipline` en P2.
+   * Valeur initiale — à calibrer.
+   */
+  turnoverOffensiveFoulBaseWeight: 15,
+} as const;
+
+// ---------------------------------------------------------------------------
 // §5 — Sélection du type de tir (spec-possession-algorithm.md)
 // ---------------------------------------------------------------------------
 export const SHOT_SELECTION = {
   // p(shotType) ∝ baseX × f(attribut du tireur), f convexe.
   // Bases calibrées pour ~40 % de tirs à 3pts au niveau ligue (spec §5, §11).
-  /** ⚙ valeur initiale — à calibrer pour ~38-42 % de tirs à 3pts. */
-  baseThree: 0.34,
+  /** ⚙ calibré (batch/calibrate, Session D) pour ~38-42 % de tirs à 3pts. */
+  baseThree: 0.42,
   /** ⚙ valeur initiale — à calibrer. */
   baseMidRange: 0.28,
   /** ⚙ valeur initiale — à calibrer. */
@@ -101,12 +133,18 @@ export const SHOT_SUCCESS = {
     MID_RANGE: 0.42,
     THREE: 0.36,
   },
-  /** ⚙ k — attackFactor = 1 + k·(shooterAttr − 75)/100. Valeur initiale — à calibrer. */
-  attackFactorK: 0.35,
-  /** ⚙ d — defenseFactor = 1 − d·(defAttr − 75)/100. Valeur initiale — à calibrer. */
-  defenseFactorD: 0.3,
-  /** ⚙ Bonus à domicile appliqué à pMake. */
-  homeFactorBonus: 0.015,
+  /**
+   * ⚙ k — attackFactor = 1 + k·(shooterAttr − 75)/100. Relevé depuis la valeur
+   * spec (0.35) pour renforcer l'effet du talent individuel. Corrélation
+   * talent→wins toujours instable d'une seed de ligue à l'autre (0.47-0.78 sur
+   * batch de 50 saisons) même après calibration — voir docs/decisions.md
+   * "Corrélation talent→wins instable" pour le détail et les pistes restantes.
+   */
+  attackFactorK: 0.6,
+  /** ⚙ d — defenseFactor = 1 − d·(defAttr − 75)/100. Calibré (Session D), même raison que `attackFactorK`. */
+  defenseFactorD: 0.5,
+  /** ⚙ Bonus à domicile appliqué à pMake — calibré (Session D) pour ~55-60 % de victoires à domicile. */
+  homeFactorBonus: 0.025,
   /** ⚙ Bornes finales de pMake. */
   pMakeMin: 0.05,
   pMakeMax: 0.85,
@@ -148,9 +186,9 @@ export const FREE_THROW = {
 export const REBOUND = {
   /**
    * ⚙ B — pOffensiveRebound = Σpoids_off / (Σpoids_off + B·Σpoids_def).
-   * Calibré pour ~26-28 % de rebonds offensifs au niveau ligue. Valeur initiale — à calibrer.
+   * Calibré (batch/calibrate, Session D) pour ~26-28 % de rebonds offensifs au niveau ligue.
    */
-  defensiveWeightMultiplierB: 1.35,
+  defensiveWeightMultiplierB: 2.6,
   /**
    * ⚙ Coefficients de g(heightCm, wingspanCm, vertical, strength) — poids physique
    * du rebond, appliqué en multiplicateur de reboundWeight. Valeurs initiales — à calibrer.
@@ -164,11 +202,24 @@ export const REBOUND = {
 } as const;
 
 // ---------------------------------------------------------------------------
+// §7 — Rebond offensif → putback (spec-possession-algorithm.md §7)
+// ---------------------------------------------------------------------------
+export const PUTBACK = {
+  /** ⚙ Multiplicateur de p(tir au cercle) après rebond offensif ("fortement augmenté"). Valeur initiale — à calibrer. */
+  rimBiasMultiplier: 2.5,
+} as const;
+
+// ---------------------------------------------------------------------------
 // §8 — Consommation d'horloge (spec-possession-algorithm.md)
 // ---------------------------------------------------------------------------
 export const CLOCK_CONSUMPTION = {
-  /** ⚙ Mise en place, en secondes. */
-  setup: { min: 4, max: 8 },
+  /**
+   * ⚙ Mise en place, en secondes. Calibré (batch/calibrate, Session D) : la
+   * fourchette spec (4-8s) produisait ~117-120 possessions/équipe/match au lieu
+   * des ~99 ciblées (§1) — allongée pour ramener le rythme dans la cible sans
+   * changer l'efficacité par possession (déjà réaliste).
+   */
+  setup: { min: 6, max: 11 },
   /** ⚙ Par passe, en secondes. */
   perPass: { min: 2, max: 5 },
   /** ⚙ Création du tir, en secondes. */
@@ -209,6 +260,27 @@ export const LEAGUE_TARGETS = {
   topScorerPpg: { min: 28, max: 33 },
   winsSpreadBestVsWorst: { best: 60, worst: 15 },
   calibrationSeasons: 50,
+} as const;
+
+/**
+ * Bornes des tests statistiques automatisés (famille 3, spec-tests-phase1.md §3).
+ * Volontairement plus larges que `LEAGUE_TARGETS` (curseurs de calibration
+ * manuelle, spec-possession-algorithm §11) — la spec des tests distingue
+ * explicitement les deux : la tolérance plus large évite qu'un test CI
+ * devienne flaky sur de la variance statistique normale.
+ */
+export const STATISTICAL_TEST_TARGETS = {
+  pointsPerTeamPerGame: { min: 108, max: 122 },
+  fgPercent: { min: 0.45, max: 0.49 },
+  threePointAttemptShare: { min: 0.36, max: 0.44 },
+  threePointPercent: { min: 0.34, max: 0.38 },
+  turnoversPerTeamPerGame: { min: 11, max: 16 },
+  offensiveReboundShare: { min: 0.24, max: 0.3 },
+  homeWinPercent: { min: 0.53, max: 0.62 },
+  topScorerPpg: { min: 26, max: 35 },
+  bestTeamWins: { min: 55, max: 68 },
+  worstTeamWins: { min: 10, max: 22 },
+  talentWinsCorrelationMin: 0.7,
 } as const;
 
 // ---------------------------------------------------------------------------

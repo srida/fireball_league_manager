@@ -20,6 +20,6 @@
     "declaration": true,
     "isolatedModules": true
   },
-  "include": ["engine/**/*.ts", "batch/**/*.ts"],
+  "include": ["engine/**/*.ts", "batch/**/*.ts", "tests/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

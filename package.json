@@ -9,7 +9,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "batch": "tsx batch/run.ts",
-    "smoke": "tsx batch/smoke.ts"
+    "calibrate": "tsx batch/calibrate.ts",
+    "smoke": "tsx batch/smoke.ts",
+    "golden:update": "tsx tests/golden/update-golden.ts",
+    "validate:p1": "vitest run && tsx batch/run.ts --seasons=50"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

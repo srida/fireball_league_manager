@@ -26,6 +26,8 @@ export type Event =
       result: ShotResult;
       contest: ContestLevel;
       assistBy?: string;
+      /** Défenseur ayant contré le tir — présent seulement si `result === "BLOCK"`. */
+      blockedBy?: string;
       clock: number;
     }
   | { t: "REBOUND"; player: string; side: ReboundSide; clock: number }
