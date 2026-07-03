@@ -1,0 +1,47 @@
+/* ==========================================================================
+   FBL — Typography tokens
+   Display: Bebas Neue (scores, titles, on-fire) — use sparingly, ALL CAPS.
+   Body:    IBM Plex Sans (UI copy, labels, reading).
+   Numeric: IBM Plex Mono (box scores, cap, standings — tabular alignment).
+   ========================================================================== */
+:root {
+  /* ---- Families ------------------------------------------------------- */
+  --fbl-font-display: "Bebas Neue", "Arial Narrow", sans-serif;
+  --fbl-font-body:    "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  --fbl-font-mono:    "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  /* ---- Weights -------------------------------------------------------- */
+  --fbl-w-regular:  400;
+  --fbl-w-medium:   500;
+  --fbl-w-semibold: 600;
+  --fbl-w-bold:     700;
+
+  /* ---- Type scale (px) ------------------------------------------------ */
+  --fbl-text-2xs: 10px;  /* micro labels, table super-scripts   */
+  --fbl-text-xs:  11px;  /* mono column headers, pill text       */
+  --fbl-text-sm:  13px;  /* dense table cells, captions          */
+  --fbl-text-md:  14px;  /* default UI / body                    */
+  --fbl-text-lg:  16px;  /* emphasised body, input text          */
+  --fbl-text-xl:  20px;  /* card titles                          */
+  --fbl-text-2xl: 26px;  /* section headers (display)            */
+  --fbl-text-3xl: 34px;  /* page titles (display)                */
+  --fbl-text-4xl: 48px;  /* big stat callouts (display)          */
+  --fbl-text-5xl: 72px;  /* scoreboard (display)                 */
+
+  /* ---- Line heights --------------------------------------------------- */
+  --fbl-leading-tight:   1.05; /* display / scores          */
+  --fbl-leading-snug:    1.3;  /* headings                  */
+  --fbl-leading-normal:  1.5;  /* body copy                 */
+  --fbl-leading-data:    1.15; /* dense tabular rows        */
+
+  /* ---- Letter spacing ------------------------------------------------- */
+  --fbl-tracking-display: 0.02em; /* Bebas titles  */
+  --fbl-tracking-label:   0.08em; /* mono labels   */
+  --fbl-tracking-normal:  0;
+
+  /* ---- Tabular figures helper value ----------------------------------- */
+  --fbl-numeric: tabular-nums; /* apply via font-variant-numeric */
+}
+
+/* Utility: guarantee column-aligned digits anywhere numbers appear. */
+.fbl-tabular { font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }

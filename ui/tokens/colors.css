@@ -1,0 +1,73 @@
+/* ==========================================================================
+   FBL — Color tokens
+   Mode sombre uniquement. Base noire de la marque, feu concentré.
+   Every value is a --fbl-* custom property.
+   ========================================================================== */
+:root {
+  /* ---- Brand source (from CLAUDE.md) ---------------------------------- */
+  --fbl-brand-black:   #0D0D0D;
+  --fbl-brand-orange:  #FF6B1A;
+  --fbl-brand-red:     #E63312;
+  --fbl-brand-yellow:  #FFC93C;
+  --fbl-brand-cream:   #F5EFE0;
+
+  /* ---- Surfaces & elevation (3 levels on deep navy) ------------------- */
+  --fbl-bg-canvas:     #0A0E1A;  /* app backdrop — deep navy */
+  --fbl-surface-1:     #121828;  /* cards, table bodies      */
+  --fbl-surface-2:     #1A2234;  /* popovers, modals, rows   */
+  --fbl-surface-3:     #26314A;  /* hover row, nested raise  */
+  --fbl-border:        #2A3450;  /* hairlines                */
+  --fbl-border-strong: #3A486B;  /* dividers, input borders  */
+  --fbl-overlay:       rgba(4,7,16,.74); /* modal scrim       */
+
+  /* ---- Text ----------------------------------------------------------- */
+  --fbl-text-primary:   #F5EFE0;
+  --fbl-text-secondary: #A6A199;
+  --fbl-text-disabled:  #6B6862;
+  --fbl-text-on-accent: #140A03; /* dark text on orange fills */
+
+  /* ---- Accent — fire (INTERACTION ONLY) ------------------------------- */
+  --fbl-accent:         #FF6B1A;
+  --fbl-accent-hover:   #FF8340;
+  --fbl-accent-active:  #E85A0C;
+  --fbl-accent-soft:    rgba(255,107,26,.14); /* tinted fills   */
+  --fbl-accent-ring:    rgba(255,107,26,.55); /* focus ring     */
+  --fbl-flame:          #FFC93C; /* on-fire highlight          */
+  --fbl-danger:         #E63312;
+  --fbl-danger-hover:   #F04A2A;
+  --fbl-danger-active:  #C7280D;
+  --fbl-danger-soft:    rgba(230,51,18,.16);
+
+  /* ---- Semantic data -------------------------------------------------- */
+  --fbl-positive:       #46CC78; /* stat up · win · healthy · under cap */
+  --fbl-positive-soft:  rgba(70,204,120,.15);
+  --fbl-negative:       #E5484D; /* stat down · loss                    */
+  --fbl-negative-soft:  rgba(229,72,77,.15);
+  --fbl-injury:         #FF5470; /* OUT — always paired with cross ✚    */
+  --fbl-injury-soft:    rgba(255,84,112,.15);
+  --fbl-caution:        #FFC93C; /* day-to-day · expiring · in tax      */
+  --fbl-caution-soft:   rgba(255,201,60,.15);
+  --fbl-neutral-soft:   rgba(245,239,224,.07); /* muted chip fill       */
+
+  /* ---- Rating tiers 0–99 (heat ramp: hotter = better) ----------------- */
+  --fbl-tier-elite:     #FFD23F; /* 88–99  white-hot gold */
+  --fbl-tier-elite-soft:rgba(255,210,63,.16);
+  --fbl-tier-good:      #FF7A29; /* 78–87  orange flame   */
+  --fbl-tier-good-soft: rgba(255,122,41,.15);
+  --fbl-tier-avg:       #7C7A85; /* 68–77  cool steel     */
+  --fbl-tier-avg-soft:  rgba(124,122,133,.16);
+  --fbl-tier-weak:      #4E4C54; /* < 68   cold ash       */
+  --fbl-tier-weak-soft: rgba(78,76,84,.22);
+
+  /* ---- Cap sheet zones ------------------------------------------------ */
+  --fbl-cap-under:  #46CC78; /* room under the cap        */
+  --fbl-cap-tax:    #FFC93C; /* over cap, into luxury tax */
+  --fbl-cap-apron1: #FF6B1A; /* first apron               */
+  --fbl-cap-apron2: #E63312; /* second apron — on fire    */
+
+  /* ---- Fire signature (earned moments only) --------------------------- */
+  --fbl-grad-fire:  linear-gradient(100deg, #FFC93C 0%, #FF6B1A 45%, #E63312 100%);
+  --fbl-grad-ember: linear-gradient(180deg, rgba(255,201,60,.18), rgba(230,51,18,.06));
+  --fbl-glow-fire:  0 0 22px rgba(255,107,26,.30);
+  --fbl-glow-flame: 0 0 14px rgba(255,201,60,.55);
+}

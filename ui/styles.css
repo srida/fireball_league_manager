@@ -1,0 +1,53 @@
+/* ==========================================================================
+   FBL — Fireball League Manager · Design System
+   Global entry point. This file is a manifest of @imports only.
+   Consumers link THIS file. Everything reachable from here ships.
+   Dark mode only — the brand's black base.
+   ========================================================================== */
+@import "tokens/fonts.css";
+@import "tokens/colors.css";
+@import "tokens/typography.css";
+@import "tokens/spacing.css";
+
+/* ---- Base reset & element defaults ------------------------------------ */
+:root { color-scheme: dark; }
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--fbl-bg-canvas);
+  color: var(--fbl-text-primary);
+  font-family: var(--fbl-font-body);
+  font-size: var(--fbl-text-md);
+  line-height: var(--fbl-leading-normal);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Numbers align by default anywhere the mono face is used. */
+code, kbd, samp, .fbl-mono {
+  font-family: var(--fbl-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+::selection { background: var(--fbl-accent-soft); color: var(--fbl-text-primary); }
+
+/* Visible keyboard focus everywhere (AA). Pointer focus stays quiet. */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--fbl-focus-ring);
+  border-radius: var(--fbl-radius-sm);
+}
+
+/* Respect reduced motion globally. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

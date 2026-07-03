@@ -1,0 +1,55 @@
+/* ==========================================================================
+   FBL — Spacing, radii, elevation & motion tokens
+   Dense manager UI: a tight 4px base scale, restrained radii & shadows.
+   ========================================================================== */
+:root {
+  /* ---- Spacing (4px base) --------------------------------------------- */
+  --fbl-space-0:   0;
+  --fbl-space-1:   2px;
+  --fbl-space-2:   4px;
+  --fbl-space-3:   8px;
+  --fbl-space-4:   12px;
+  --fbl-space-5:   16px;
+  --fbl-space-6:   20px;
+  --fbl-space-7:   24px;
+  --fbl-space-8:   32px;
+  --fbl-space-9:   40px;
+  --fbl-space-10:  56px;
+  --fbl-space-11:  72px;
+
+  /* ---- Radii ---------------------------------------------------------- */
+  --fbl-radius-xs:   3px;  /* chips, tight inputs        */
+  --fbl-radius-sm:   6px;  /* buttons, inputs            */
+  --fbl-radius-md:   10px; /* cards                      */
+  --fbl-radius-lg:   14px; /* panels, modals             */
+  --fbl-radius-pill: 999px;
+
+  /* ---- Elevation (shadows tuned for a black canvas) ------------------- */
+  --fbl-elev-0: none;
+  --fbl-elev-1: 0 1px 2px rgba(0,0,0,.5);
+  --fbl-elev-2: 0 4px 14px rgba(0,0,0,.55);
+  --fbl-elev-3: 0 12px 34px rgba(0,0,0,.6);
+  --fbl-elev-modal: 0 24px 60px rgba(0,0,0,.7);
+
+  /* ---- Touch targets (mobile-first data UI) --------------------------- */
+  --fbl-touch-min: 44px;
+
+  /* ---- Motion --------------------------------------------------------- */
+  --fbl-dur-instant: 80ms;
+  --fbl-dur-fast:    140ms;
+  --fbl-dur-base:    220ms;
+  --fbl-dur-slow:    360ms;
+  --fbl-ease-out:    cubic-bezier(.2, .7, .3, 1);
+  --fbl-ease-in-out: cubic-bezier(.6, 0, .3, 1);
+  --fbl-ease-emphasis: cubic-bezier(.34, 1.4, .5, 1);
+
+  /* ---- Layout --------------------------------------------------------- */
+  --fbl-z-sticky:  10;
+  --fbl-z-nav:     100;
+  --fbl-z-toast:   900;
+  --fbl-z-modal:   1000;
+  --fbl-z-tooltip: 1100;
+
+  /* ---- Focus ring (visible keyboard focus, AA) ------------------------ */
+  --fbl-focus-ring: 0 0 0 2px var(--fbl-bg-canvas), 0 0 0 4px var(--fbl-accent);
+}

@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FBL Manager</title>
+<link rel="icon" href="../../assets/logo-fbl-icon.png">
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  html,body{height:100%}
+  body{margin:0;background:var(--fbl-bg-canvas)}
+  #root{height:100%}
+  .app{display:grid;grid-template-columns:220px 1fr;height:100vh;min-height:0}
+  .side{background:#080B14;border-right:1px solid var(--fbl-border);display:flex;flex-direction:column;padding:16px 12px;gap:4px}
+  .brand{display:flex;align-items:center;gap:10px;padding:6px 8px 16px}
+  .brand img{height:34px;width:auto}
+  .brand .t{font-family:var(--fbl-font-display);font-size:22px;letter-spacing:.05em;color:var(--fbl-text-primary);line-height:.9}
+  .brand .s{font-family:var(--fbl-font-mono);font-size:9px;letter-spacing:.14em;color:var(--fbl-accent)}
+  .nav{display:flex;align-items:center;gap:10px;min-height:42px;padding:0 12px;border-radius:var(--fbl-radius-sm);cursor:pointer;font-family:var(--fbl-font-body);font-size:13.5px;font-weight:500;color:var(--fbl-text-secondary);border:none;background:transparent;text-align:left;width:100%;transition:background var(--fbl-dur-fast),color var(--fbl-dur-fast)}
+  .nav:hover{background:var(--fbl-neutral-soft);color:var(--fbl-text-primary)}
+  .nav.on{background:var(--fbl-accent-soft);color:var(--fbl-accent)}
+  .nav .ico{width:18px;text-align:center;font-size:15px}
+  .main{overflow-y:auto;min-height:0}
+  .topbar{position:sticky;top:0;z-index:10;display:flex;align-items:center;gap:16px;padding:14px 26px;background:rgba(10,14,26,.86);backdrop-filter:blur(8px);border-bottom:1px solid var(--fbl-border)}
+  .topbar h1{margin:0;font-family:var(--fbl-font-display);font-weight:400;font-size:26px;letter-spacing:.04em;text-transform:uppercase;color:var(--fbl-text-primary)}
+  .content{padding:22px 26px 60px;max-width:1180px}
+  .grid2{display:grid;grid-template-columns:1.35fr 1fr;gap:20px;align-items:start}
+  .grid-live{display:grid;grid-template-columns:1fr 400px;gap:18px;align-items:start}
+  .fiche-top{display:grid;grid-template-columns:minmax(340px,420px) 1fr;gap:20px;align-items:start}
+  .fiche-kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .stack{display:flex;flex-direction:column;gap:18px}
+  .lbl{font-family:var(--fbl-font-mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--fbl-text-disabled);margin-bottom:10px}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .kpi{background:var(--fbl-surface-1);border:1px solid var(--fbl-border);border-radius:var(--fbl-radius-md);padding:14px 16px}
+  .kpi .v{font-family:var(--fbl-font-display);font-size:32px;line-height:.9;color:var(--fbl-text-primary)}
+  .kpi .k{font-family:var(--fbl-font-body);font-size:11px;color:var(--fbl-text-secondary);margin-top:6px;text-transform:uppercase;letter-spacing:.05em}
+  .mobtoggle{display:none}
+  @media(max-width:900px){
+    .app{grid-template-columns:1fr}
+    .side{position:fixed;inset:0 auto 0 0;width:220px;z-index:200;transform:translateX(-100%);transition:transform var(--fbl-dur-base) var(--fbl-ease-out)}
+    .side.open{transform:none}
+    .grid2,.grid-live,.fiche-top{grid-template-columns:1fr}
+    .fiche-kpis{grid-template-columns:repeat(3,1fr)}
+    .grid-live{display:flex;flex-direction:column}
+    .kpis{grid-template-columns:repeat(2,1fr)}
+    .mobtoggle{display:inline-flex}
+    .content{padding:16px 16px 60px}
+    .topbar{padding:12px 16px}
+    .topbar h1{font-size:21px}
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<script src="data.js"></script>
+<script type="text/babel">
+const NS = window.FBLFireballLeagueDesignSystem_5f42ba;
+const { Button, Tabs, Badge, PositionBadge, InjuryBadge, RatingBadge, StatTable,
+        PlayerCard, ScoreBanner, BoxScore, PlayByPlay, CapSheet, Standings,
+        ProgressBar, Modal, Toast, ToastStack } = NS;
+const D = window.FBL_DATA;
+
+const rosterCols = [
+  { key:"name", label:"Joueur", render:r=>(
+    <span style={{display:"inline-flex",gap:6,alignItems:"center"}}>
+      {r.onFire && <span style={{fontSize:11}}>🔥</span>}{r.name}<PositionBadge pos={r.pos}/>
+      {r.status!=="OK" && <InjuryBadge status={r.status}/>}
+    </span>) },
+  { key:"ovr", label:"OVR", numeric:true, render:r=><RatingBadge value={r.ovr} size="sm" glow={false}/> },
+  { key:"age", label:"ÂGE", numeric:true },
+  { key:"mpg", label:"MIN", numeric:true },
+  { key:"pts", label:"PTS", numeric:true, tooltip:"Points/match" },
+  { key:"reb", label:"REB", numeric:true },
+  { key:"ast", label:"AST", numeric:true },
+  { key:"tp",  label:"3P%", numeric:true },
+  { key:"contract", label:"Contrat", render:r=><span style={{fontFamily:"var(--fbl-font-mono)",fontSize:12,color:"var(--fbl-text-secondary)"}}>{r.contract}</span> },
+];
+
+function Dashboard({ onPlayer }){
+  return (
+    <div className="stack">
+      <div className="kpis">
+        <div className="kpi"><div className="v">41-22</div><div className="k">Bilan · 1er Ouest</div></div>
+        <div className="kpi"><div className="v" style={{color:"var(--fbl-positive)"}}>W5</div><div className="k">Série en cours</div></div>
+        <div className="kpi"><div className="v" style={{color:"var(--fbl-cap-apron1)"}}>182.4M</div><div className="k">Masse salariale</div></div>
+        <div className="kpi"><div className="v">114.8</div><div className="k">Pts / match</div></div>
+      </div>
+      <div>
+        <div className="lbl">Prochain match — {D.nextGame.day}</div>
+        <ScoreBanner state="sched" tipoff={D.nextGame.tipoff}
+          away={{abbr:D.nextGame.away.abbr, name:D.nextGame.away.name, record:D.nextGame.away.record}}
+          home={{abbr:D.nextGame.home.abbr, name:D.nextGame.home.name, record:D.nextGame.home.record}}/>
+      </div>
+      <div>
+        <div className="lbl">Effectif — meilleurs scoreurs</div>
+        <StatTable columns={rosterCols.slice(0,7)} rows={D.roster} rowKey="name"
+          defaultSort={{key:"pts",dir:"desc"}} hotKey="onFire" onRowClick={onPlayer} dense/>
+      </div>
+      <div>
+        <div className="lbl">Cap sheet</div>
+        <CapSheet {...D.cap}/>
+      </div>
+      <div>
+        <div className="lbl">Classement Conférence Ouest</div>
+        <Standings conference="Ouest" teams={D.standings}/>
+      </div>
+    </div>
+  );
+}
+
+function Roster({ onPlayer }){
+  const [tab,setTab]=React.useState("all");
+  const rows = tab==="all"?D.roster:tab==="inj"?D.roster.filter(r=>r.status!=="OK"):D.roster.filter(r=>r.ovr>=78);
+  return (
+    <div className="stack">
+      <Tabs value={tab} onChange={setTab} tabs={[
+        {value:"all",label:"Effectif complet",count:D.roster.length},
+        {value:"star",label:"Titulaires"},
+        {value:"inj",label:"Infirmerie",count:D.roster.filter(r=>r.status!=="OK").length},
+      ]}/>
+      <StatTable columns={rosterCols} rows={rows} rowKey="name"
+        defaultSort={{key:"ovr",dir:"desc"}} hotKey="onFire" onRowClick={onPlayer}/>
+      <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+        <Button>Proposer un trade</Button>
+        <Button variant="secondary">Signer un agent libre</Button>
+      </div>
+    </div>
+  );
+}
+
+function LiveMatch(){
+  const L = D.live;
+  return (
+    <div className="grid-live">
+      <div className="stack">
+        <ScoreBanner state="live" period="4TH" clock={L.clock}
+          away={{abbr:L.away.abbr, record:L.away.record, score:L.awayScore}}
+          home={{abbr:L.home.abbr, record:L.home.record, score:L.homeScore, hot:true}}/>
+        <div>
+          <div className="lbl">Box score</div>
+          <BoxScore state="live" period="4TH" clock={L.clock}
+            away={{abbr:L.away.abbr, score:L.awayScore}} home={{abbr:L.home.abbr, score:L.homeScore}}
+            lineScore={L.lineScore} boxHome={L.boxHome} boxAway={L.boxAway}/>
+        </div>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+          <Button>Temps mort</Button>
+          <Button variant="secondary">Ajuster la tactique</Button>
+          <Button variant="ghost">Simuler jusqu'à la fin</Button>
+        </div>
+      </div>
+      <div>
+        <div className="lbl">Play-by-play</div>
+        <PlayByPlay awayAbbr={L.away.abbr} homeAbbr={L.home.abbr} events={L.events} maxHeight={560}/>
+      </div>
+    </div>
+  );
+}
+
+const glogCols = [
+  { key:"g", label:"Match", render:r=><span style={{fontFamily:"var(--fbl-font-body)",fontWeight:500}}>{r.hot&&<span style={{marginRight:5}}>🔥</span>}{r.g}</span> },
+  { key:"res", label:"Résultat", render:r=>(
+    <span style={{color:r.res[0]==="V"?"var(--fbl-positive)":"var(--fbl-negative)"}}>{r.res}</span>) },
+  { key:"min", label:"MIN", numeric:true },
+  { key:"pts", label:"PTS", numeric:true, render:r=>(
+    <span style={{color:r.hot?"var(--fbl-flame)":"var(--fbl-text-primary)",fontWeight:r.hot?700:400,textShadow:r.hot?"var(--fbl-glow-flame)":"none"}}>{r.pts}</span>) },
+  { key:"reb", label:"REB", numeric:true },
+  { key:"ast", label:"AST", numeric:true },
+  { key:"tp", label:"3PT", numeric:true },
+  { key:"pm", label:"+/−", numeric:true, render:r=>(
+    <span style={{color:r.pm>0?"var(--fbl-positive)":r.pm<0?"var(--fbl-negative)":"var(--fbl-text-secondary)"}}>{r.pm>0?`+${r.pm}`:r.pm}</span>) },
+];
+
+function PlayerFiche(){
+  const p = D.featured;
+  const a = p.seasonAvg;
+  const kpis = [
+    { k:"PTS", v:a.pts, hot:true }, { k:"PASS", v:a.ast }, { k:"REB", v:a.reb },
+    { k:"3PT%", v:a.tp }, { k:"MIN", v:a.min }, { k:"MATCHS", v:a.gp },
+  ];
+  return (
+    <div className="stack">
+      <div className="fiche-top">
+        <PlayerCard player={p} style={{maxWidth:"none"}}/>
+        <div className="stack">
+          <div>
+            <div className="lbl">Moyennes saison 2029-30</div>
+            <div className="fiche-kpis">
+              {kpis.map(x=>(
+                <div className="kpi" key={x.k}>
+                  <div className="v" style={x.hot?{color:"var(--fbl-flame)",textShadow:"var(--fbl-glow-flame)"}:null}>{x.v}</div>
+                  <div className="k">{x.k}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className="lbl">Splits</div>
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {p.splits.map(s=>(
+                <div key={s.label} style={{display:"flex",alignItems:"center",gap:12,background:"var(--fbl-surface-1)",border:"1px solid var(--fbl-border)",borderRadius:"var(--fbl-radius-sm)",padding:"10px 14px"}}>
+                  <span style={{flex:1,fontFamily:"var(--fbl-font-body)",fontSize:13,color:"var(--fbl-text-secondary)"}} dangerouslySetInnerHTML={{__html:s.label}}/>
+                  <span style={{fontFamily:"var(--fbl-font-mono)",fontSize:13,color:"var(--fbl-text-primary)",fontVariantNumeric:"tabular-nums"}}>{s.pts} pts</span>
+                  <span style={{fontFamily:"var(--fbl-font-mono)",fontSize:12,color:"var(--fbl-text-disabled)",fontVariantNumeric:"tabular-nums",width:64,textAlign:"right"}}>{s.tp}% 3PT</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+            <Button>Proposer une prolongation</Button>
+            <Button variant="secondary">Inclure dans un trade</Button>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div className="lbl">Game log — 8 derniers matchs</div>
+        <StatTable columns={glogCols} rows={p.gamelog} rowKey="g" hotKey="hot" dense/>
+      </div>
+      <div>
+        <div className="lbl">Forme récente</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:12}}>
+          {p.recent.map((g,i)=>(
+            <ScoreBanner key={i} state="final" compact away={g.away} home={g.home}/>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const NAV = [
+  { id:"dash", ico:"◆", label:"Tableau de bord" },
+  { id:"roster", ico:"▤", label:"Effectif" },
+  { id:"fiche", ico:"◉", label:"Fiche joueur" },
+  { id:"live", ico:"●", label:"Match live" },
+];
+
+function App(){
+  const [screen,setScreen]=React.useState("dash");
+  const [menuOpen,setMenu]=React.useState(false);
+  const [player,setPlayer]=React.useState(null);
+  const [toast,setToast]=React.useState(null);
+  const openPlayer=(row)=>{ const f=(row&&row.name===D.featured.name)?D.featured:{...D.featured,name:row?row.name:D.featured.name,pos:row?row.pos:"PG",ovr:row?row.ovr:80,onFire:row?!!row.onFire:false,status:row?row.status:"OK"}; setPlayer(f); };
+  const title = screen==="dash"?"Ashford Blaze":screen==="roster"?"Effectif":screen==="fiche"?"Fiche joueur":"Match live";
+  return (
+    <div className="app">
+      <aside className={"side"+(menuOpen?" open":"")}>
+        <div className="brand">
+          <img src="../../assets/logo-fbl-icon.png" alt=""/>
+          <div><div className="t">BLAZE</div><div className="s">FIREBALL LEAGUE</div></div>
+        </div>
+        {NAV.map(n=>(
+          <button key={n.id} className={"nav"+(screen===n.id?" on":"")}
+            onClick={()=>{setScreen(n.id);setMenu(false);}}>
+            <span className="ico">{n.ico}</span>{n.label}
+            {n.id==="live" && <span style={{marginLeft:"auto",width:7,height:7,borderRadius:999,background:"var(--fbl-accent)",display:"inline-block"}}/>}
+          </button>
+        ))}
+        <div style={{marginTop:"auto",padding:"8px"}}>
+          <div style={{fontFamily:"var(--fbl-font-mono)",fontSize:10,color:"var(--fbl-text-disabled)",lineHeight:1.6}}>SAISON 2029-30<br/>Journée 63 / 82</div>
+        </div>
+      </aside>
+      <div className="main">
+        <div className="topbar">
+          <button className="mobtoggle nav" style={{width:"auto",padding:"8px 10px",background:"var(--fbl-surface-2)"}} onClick={()=>setMenu(o=>!o)}>☰</button>
+          <h1>{title}</h1>
+          {screen==="dash" && <div style={{marginLeft:"auto"}}><Button size="sm" onClick={()=>setToast({tone:"positive",title:"Simulation lancée",message:"Match suivant simulé."})}>Simuler le match</Button></div>}
+        </div>
+        <div className="content">
+          {screen==="dash" && <Dashboard onPlayer={openPlayer}/>}
+          {screen==="roster" && <Roster onPlayer={openPlayer}/>}
+          {screen==="fiche" && <PlayerFiche/>}
+          {screen==="live" && <LiveMatch/>}
+        </div>
+      </div>
+      <Modal open={!!player} onClose={()=>setPlayer(null)} title="Fiche joueur" width={440}
+        footer={<Button onClick={()=>{setScreen("fiche");setPlayer(null);}}>Voir la fiche complète</Button>}>
+        {player && <PlayerCard player={player} style={{maxWidth:"none",border:"none",background:"transparent"}}/>}
+      </Modal>
+      {toast && <ToastStack><Toast {...toast} onClose={()=>setToast(null)}/></ToastStack>}
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
