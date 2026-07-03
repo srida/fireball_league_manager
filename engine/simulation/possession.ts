@@ -5,8 +5,10 @@
  *
  * P1 : seuls `physical` et `skills` sont actifs (spec-player-model §9). P2
  * Session 2 : `gameStaminaFactor` lit désormais l'état de fatigue vivant du
- * match (`state.gameStamina`, plan-développement §Phase 2). `pressureModifier`
- * reste identité jusqu'à la Session 3 (pression et mental).
+ * match (`state.gameStamina`, plan-développement §Phase 2). P2 Session 3 :
+ * `pressureModifier` lit un vrai `PressureContext` calculé par possession
+ * (mental.ts), `discipline` pilote la cause OFFENSIVE_FOUL du turnover, et le
+ * buffer de leadership/traits Guerrier sont appliqués via mental.ts.
  */
 import {
   ACTION_MODIFIERS,
@@ -14,6 +16,8 @@ import {
   AND_ONE,
   BLOCK,
   CLOCK_CONSUMPTION,
+  FREE_THROW,
+  PRESSURE,
   PUTBACK,
   REBOUND,
   SHOT_SELECTION,
@@ -23,15 +27,23 @@ import {
   TACTICS_PACE_CLOCK_MULTIPLIER,
   TACTICS_PRESSING_MULTIPLIER,
   USAGE,
-  gameStaminaFactor,
   pressureModifier,
 } from "../config/tuning.js";
+import {
+  applyLeadershipBuffer,
+  bestTeammateLeadership,
+  computePressureContext,
+  disciplineOffensiveFoulWeight,
+  effectiveGameStaminaFactor,
+  teamLeadershipBufferStrength,
+} from "./mental.js";
 import type { RNG } from "../utils/rng.js";
 import type {
   ContestLevel,
   Event,
   GameState,
   OnCourtPlayer,
+  PressureContext,
   ShotType,
   TeamSide,
   TeamTactics,
@@ -60,7 +72,7 @@ function usageWeight(p: OnCourtPlayer, gameStamina: Readonly<Record<string, numb
     USAGE.w1BallHandling * effective.ballHandling +
     USAGE.w2CourtVision * effective.courtVision +
     USAGE.w3ScoringAverage * avg(effective.finishing, effective.midRange, effective.threePoint);
-  return raw * USAGE.positionFactor[player.position] * gameStaminaFactor(gameStamina[player.id] ?? 100);
+  return raw * USAGE.positionFactor[player.position] * effectiveGameStaminaFactor(player, gameStamina[player.id] ?? 100);
 }
 
 function chooseCarrier(
@@ -230,6 +242,7 @@ function resolveShot(
   isPutback: boolean,
   clock: number,
   gameStamina: Readonly<Record<string, number>>,
+  pressureContext: PressureContext,
   rng: RNG,
 ): ShotResolution {
   const shotType = chooseShotType(shooter, offenseTactics, rng, isPutback);
@@ -268,8 +281,13 @@ function resolveShot(
         ? shooter.effective.midRange
         : shooter.effective.finishing;
 
-  const pressureMod = pressureModifier(shooter.player.hidden.trueComposure, shooter.player.mental.traits, 0);
-  const fatigueFactor = gameStaminaFactor(gameStamina[shooter.player.id] ?? 100);
+  const rawPressureMod = pressureModifier(shooter.player.hidden.trueComposure, shooter.player.mental.traits, pressureContext);
+  const bufferStrength = teamLeadershipBufferStrength(
+    bestTeammateLeadership(offense, shooter.player.id),
+    pressureContext.pressureScore,
+  );
+  const pressureMod = applyLeadershipBuffer(rawPressureMod, bufferStrength);
+  const fatigueFactor = effectiveGameStaminaFactor(shooter.player, gameStamina[shooter.player.id] ?? 100);
   const pMake = computePMake(shotType, shooterAttr, defAttr, contest, isHome, pressureMod, fatigueFactor);
 
   const made = rng.bool(pMake);
@@ -296,7 +314,7 @@ function resolveShot(
   const pAndOne = Math.min(rng.float(AND_ONE.min, AND_ONE.max) * (shooter.effective.strength / 75), 1);
   if (rng.bool(pAndOne)) {
     events.push({ t: "FOUL", player: defender.player.id, on: shooter.player.id, type: "SHOOTING", clock });
-    const ft = resolveFreeThrows(shooter, 1, 1, rng, clock);
+    const ft = resolveFreeThrows(shooter, 1, 1, pressureContext, rng, clock);
     events.push(...ft.events);
     totalPoints += ft.made;
   }
@@ -304,16 +322,26 @@ function resolveShot(
   return { events, points: totalPoints, ended: true, offensiveRebound: false };
 }
 
+/** spec §7 — malus de lancers francs si pressureScore élevé et composure faible. */
+function freeThrowPressurePenalty(trueComposure: number, pressureContext: PressureContext): number {
+  if (pressureContext.pressureScore < PRESSURE.highPressureThreshold) return 0;
+  const composureDeficit = Math.max(0, PRESSURE.composureNeutral - trueComposure);
+  if (composureDeficit <= 0) return 0;
+  return FREE_THROW.pressurePenalty * (composureDeficit / PRESSURE.composureNeutral);
+}
+
 function resolveFreeThrows(
   shooter: OnCourtPlayer,
   count: number,
   startIndex: number,
+  pressureContext: PressureContext,
   rng: RNG,
   clock: number,
 ): { events: Event[]; made: number } {
   const events: Event[] = [];
   let made = 0;
-  const pMake = shooter.effective.freeThrow / 100;
+  const penalty = freeThrowPressurePenalty(shooter.player.hidden.trueComposure, pressureContext);
+  const pMake = Math.max(0, shooter.effective.freeThrow / 100 - penalty);
   for (let i = 0; i < count; i++) {
     const success = rng.bool(pMake);
     if (success) made++;
@@ -368,9 +396,9 @@ function resolveTurnover(carrier: OnCourtPlayer, defender: OnCourtPlayer, clock:
   const cEff = carrier.effective;
   const dEff = defender.effective;
 
-  // P1 : discipline (mental) n'est pas actif — seule la technique (skills) pilote les causes.
+  // P2 Session 3 : discipline (mental) module la cause OFFENSIVE_FOUL (docs/decisions.md).
   const stealWeight = Math.max(dEff.steal - 40, 1);
-  const offensiveFoulWeight = ACTION_MODIFIERS.turnoverOffensiveFoulBaseWeight;
+  const offensiveFoulWeight = disciplineOffensiveFoulWeight(carrier.player.mental.discipline);
   const handleWeight = Math.max(100 - cEff.ballHandling, 1);
   const badPassWeight = Math.max(100 - cEff.passing, 1) * 0.7;
 
@@ -410,6 +438,8 @@ export function resolvePossession(state: GameState, rng: RNG): PossessionResult 
   const defenseTactics = state.tactics[defenseSide];
   // spec plan P2 §Session 1 : le pace de l'attaquant seul pilote la consommation d'horloge de sa possession.
   const paceMultiplier = TACTICS_PACE_CLOCK_MULTIPLIER[offenseTactics.pace];
+  // spec plan P2 §Session 3 : contexte de pression figé pour toute la possession (score/horloge en début de possession).
+  const pressureContext = computePressureContext(state);
 
   const events: Event[] = [];
   let clockUsed = 0;
@@ -462,6 +492,7 @@ export function resolvePossession(state: GameState, rng: RNG): PossessionResult 
           isPutback,
           quarterClockRemaining,
           state.gameStamina,
+          pressureContext,
           rng,
         );
         events.push(...shot.events);
@@ -501,7 +532,7 @@ export function resolvePossession(state: GameState, rng: RNG): PossessionResult 
           type: "SHOOTING",
           clock: quarterClockRemaining,
         });
-        const ft = resolveFreeThrows(carrier, 2, 1, rng, quarterClockRemaining);
+        const ft = resolveFreeThrows(carrier, 2, 1, pressureContext, rng, quarterClockRemaining);
         events.push(...ft.events);
         return { events, points: ft.made, clockUsed, nextPossession: defenseSide };
       }

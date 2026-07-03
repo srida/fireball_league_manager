@@ -1,4 +1,4 @@
-import type { Position, TeamSide } from "./common.js";
+import type { GameContextInfo, Position, TeamSide } from "./common.js";
 import type { Event, InjurySeverity } from "./event.js";
 import type { Player, PlayerPhysical, PlayerSkills } from "./player.js";
 import type { TeamTactics } from "./team.js";
@@ -94,8 +94,16 @@ export interface GameState {
   gameStamina: Record<string, number>;
   /** Blessures survenues pendant ce match (plan P2 §Session 2), sortie forcée définitive. */
   injuries: Record<string, { severity: InjurySeverity; gamesOut: number }>;
+  /**
+   * Facteur de variance de performance par match (plan P2 §Session 3, traits
+   * métronome/erratique), tiré une fois par joueur au début du match — 1 (neutre)
+   * pour tout joueur sans l'un des deux traits. Appliqué aux `skills` de
+   * `OnCourtPlayer.effective`, y compris pour les entrants en cours de match
+   * (rotation.ts), pour rester cohérent entre le 5 de départ et le banc.
+   */
+  variance: Readonly<Record<string, number>>;
   context: {
     homeTeamId: string;
     awayTeamId: string;
-  };
+  } & GameContextInfo;
 }

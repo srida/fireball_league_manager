@@ -4,9 +4,15 @@
  * Format standard NBA repris tel quel (non protégé, cf. CLAUDE.md).
  */
 import type { RNG } from "../utils/rng.js";
+import type { GameContextInfo } from "../types/index.js";
 
 /** Simule un seul match entre deux équipes ; découplé du moteur de possession pour rester testable. */
-export type GameSimulator = (homeTeamId: string, awayTeamId: string, rng: RNG) => { homeScore: number; awayScore: number };
+export type GameSimulator = (
+  homeTeamId: string,
+  awayTeamId: string,
+  rng: RNG,
+  context: GameContextInfo,
+) => { homeScore: number; awayScore: number };
 
 export interface SeriesResult {
   winnerTeamId: string;
@@ -19,12 +25,18 @@ export interface SeriesResult {
 /** Format 2-2-1-1-1 : la meilleure seed reçoit les matchs 1, 2, 5 et 7. */
 const SERIES_HOME_PATTERN = ["HIGHER", "HIGHER", "LOWER", "LOWER", "HIGHER", "LOWER", "HIGHER"] as const;
 
-/** Série au meilleur des 7 (4 victoires) — spec : "une série s'arrête à 4 victoires". */
+/**
+ * Série au meilleur des 7 (4 victoires) — spec : "une série s'arrête à 4 victoires".
+ * `gameTier` distingue playoffs de conférence et Finales FBL (spec-player-model §7
+ * "base(typeMatch)", plan P2 §Session 3) ; élimination/game 7 dérivés du score de
+ * série courant, connu à chaque itération de cette boucle.
+ */
 export function simulateSeries(
   rng: RNG,
   higherSeedTeamId: string,
   lowerSeedTeamId: string,
   playGame: GameSimulator,
+  gameTier: "PLAYOFFS" | "FINALS" = "PLAYOFFS",
 ): SeriesResult {
   let higherWins = 0;
   let lowerWins = 0;
@@ -34,7 +46,12 @@ export function simulateSeries(
     if (higherWins === 4 || lowerWins === 4) break;
     const homeTeamId = homeSide === "HIGHER" ? higherSeedTeamId : lowerSeedTeamId;
     const awayTeamId = homeSide === "HIGHER" ? lowerSeedTeamId : higherSeedTeamId;
-    const { homeScore, awayScore } = playGame(homeTeamId, awayTeamId, rng);
+    const context: GameContextInfo = {
+      gameTier,
+      isEliminationGame: higherWins === 3 || lowerWins === 3,
+      isGame7: higherWins === 3 && lowerWins === 3,
+    };
+    const { homeScore, awayScore } = playGame(homeTeamId, awayTeamId, rng, context);
     gamesPlayed++;
     const homeWon = homeScore > awayScore;
     const higherWon = (homeWon && homeSide === "HIGHER") || (!homeWon && homeSide === "LOWER");
@@ -64,18 +81,34 @@ export interface PlayInResult {
   eighthSeedTeamId: string;
 }
 
-/** Play-in standard : 7v8 (le vainqueur est 7e), 9v10, puis perdant(7v8) vs vainqueur(9v10) pour la 8e place. */
+/**
+ * Play-in standard : 7v8 (le vainqueur est 7e), 9v10, puis perdant(7v8) vs vainqueur(9v10) pour la 8e place.
+ * Enjeu (plan P2 §Session 3) : le 7v8 n'élimine personne (le perdant rejoue le
+ * match décisif) ; 9v10 et le match décisif éliminent le perdant de la saison.
+ */
 export function runPlayIn(rng: RNG, seeds: PlayInSeeds, playGame: GameSimulator): PlayInResult {
-  const firstGame = playGame(seeds.seven, seeds.eight, rng);
+  const firstGame = playGame(seeds.seven, seeds.eight, rng, {
+    gameTier: "PLAY_IN",
+    isEliminationGame: false,
+    isGame7: false,
+  });
   const sevenWon = firstGame.homeScore > firstGame.awayScore;
   const seventhSeedTeamId = sevenWon ? seeds.seven : seeds.eight;
   const firstGameLoserTeamId = sevenWon ? seeds.eight : seeds.seven;
 
-  const secondGame = playGame(seeds.nine, seeds.ten, rng);
+  const secondGame = playGame(seeds.nine, seeds.ten, rng, {
+    gameTier: "PLAY_IN",
+    isEliminationGame: true,
+    isGame7: false,
+  });
   const winnerOfNineTen = secondGame.homeScore > secondGame.awayScore ? seeds.nine : seeds.ten;
 
   // Le perdant du 7v8 reste mieux classé : il reçoit le match décisif.
-  const decisiveGame = playGame(firstGameLoserTeamId, winnerOfNineTen, rng);
+  const decisiveGame = playGame(firstGameLoserTeamId, winnerOfNineTen, rng, {
+    gameTier: "PLAY_IN",
+    isEliminationGame: true,
+    isGame7: false,
+  });
   const eighthSeedTeamId =
     decisiveGame.homeScore > decisiveGame.awayScore ? firstGameLoserTeamId : winnerOfNineTen;
 
@@ -128,7 +161,7 @@ export function runConferenceBracket(rng: RNG, seeds: readonly TeamSeed[], playG
       const higher = a.seed < b.seed ? a : b;
       const lower = a.seed < b.seed ? b : a;
 
-      const result = simulateSeries(rng, higher.teamId, lower.teamId, playGame);
+      const result = simulateSeries(rng, higher.teamId, lower.teamId, playGame, "PLAYOFFS");
       roundResults.push(result);
       nextRound.push(result.winnerTeamId === higher.teamId ? higher : lower);
     }
@@ -154,5 +187,5 @@ export function runFinals(
 ): SeriesResult {
   const higher = conferenceChampionA.seed <= conferenceChampionB.seed ? conferenceChampionA : conferenceChampionB;
   const lower = conferenceChampionA.seed <= conferenceChampionB.seed ? conferenceChampionB : conferenceChampionA;
-  return simulateSeries(rng, higher.teamId, lower.teamId, playGame);
+  return simulateSeries(rng, higher.teamId, lower.teamId, playGame, "FINALS");
 }

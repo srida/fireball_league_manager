@@ -1,9 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { createRng } from "../utils/rng.js";
-import { runConferenceBracket, runFinals, runPlayIn, simulateSeries, type TeamSeed } from "./playoffs.js";
+import { runConferenceBracket, runFinals, runPlayIn, simulateSeries, type GameSimulator, type TeamSeed } from "./playoffs.js";
+import type { GameContextInfo } from "../types/index.js";
 
 const homeAlwaysWins = () => ({ homeScore: 100, awayScore: 90 });
 const awayAlwaysWins = () => ({ homeScore: 90, awayScore: 100 });
+
+/** Capture le contexte reçu par chaque match, dans l'ordre d'appel (plan P2 §Session 3). */
+function contextCapturingSimulator(winner: "HOME" | "AWAY"): { playGame: GameSimulator; contexts: GameContextInfo[] } {
+  const contexts: GameContextInfo[] = [];
+  const playGame: GameSimulator = (_home, _away, _rng, context) => {
+    contexts.push(context);
+    return winner === "HOME" ? { homeScore: 100, awayScore: 90 } : { homeScore: 90, awayScore: 100 };
+  };
+  return { playGame, contexts };
+}
 
 describe("simulateSeries — best-of-7, format 2-2-1-1-1 (spec-tests-phase1 §1)", () => {
   it("une série s'arrête à 4 victoires, jamais plus de 7 matchs", () => {
@@ -86,5 +97,61 @@ describe("runFinals — avantage du terrain à la meilleure seed", () => {
     const champB: TeamSeed = { teamId: "CONF_B_CHAMP", seed: 5 };
     const result = runFinals(rng, champA, champB, homeAlwaysWins);
     expect(result.winnerTeamId).toBe("CONF_A_CHAMP");
+  });
+});
+
+describe("enjeu de match — gameTier/élimination/game 7 (plan-développement §Phase 2 — Session 3)", () => {
+  it("runPlayIn : 7v8 n'élimine personne, 9v10 et le match décisif éliminent le perdant", () => {
+    const { playGame, contexts } = contextCapturingSimulator("HOME");
+    const rng = createRng("play-in-context");
+    runPlayIn(rng, { seven: "S7", eight: "S8", nine: "S9", ten: "S10" }, playGame);
+
+    expect(contexts).toHaveLength(3);
+    expect(contexts.every((c) => c.gameTier === "PLAY_IN")).toBe(true);
+    expect(contexts[0]!.isEliminationGame).toBe(false);
+    expect(contexts[1]!.isEliminationGame).toBe(true);
+    expect(contexts[2]!.isEliminationGame).toBe(true);
+    expect(contexts.every((c) => c.isGame7 === false)).toBe(true);
+  });
+
+  it("simulateSeries : élimination dès qu'une équipe a 3 victoires, game 7 seulement à 3-3", () => {
+    const { playGame, contexts } = contextCapturingSimulator("HOME");
+    const rng = createRng("series-context-home-wins");
+    simulateSeries(rng, "HIGH", "LOW", playGame, "PLAYOFFS");
+
+    // L'hôte gagne systématiquement : avec le pattern 2-2-1-1-1, la meilleure
+    // seed l'emporte 4-3 en 7 matchs (même scénario que le test "avantage du
+    // terrain" ci-dessus) — 3-2 après le match 6, donc élimination dès le
+    // match 6 (index 5), Game 7 seulement au dernier.
+    expect(contexts).toHaveLength(7);
+    expect(contexts.every((c) => c.gameTier === "PLAYOFFS")).toBe(true);
+    expect(contexts.slice(0, 5).every((c) => c.isEliminationGame === false)).toBe(true);
+    expect(contexts[5]!.isEliminationGame).toBe(true);
+    expect(contexts[5]!.isGame7).toBe(false);
+    expect(contexts[6]!.isEliminationGame).toBe(true);
+    expect(contexts[6]!.isGame7).toBe(true);
+  });
+
+  it("simulateSeries : série qui va à 7 matchs marque le dernier match comme Game 7", () => {
+    const rng = createRng("series-context-alternating");
+    // Séquence "l'hôte gagne" choisie pour que, combinée au pattern hôte 2-2-1-1-1
+    // (HIGHER, HIGHER, LOWER, LOWER, HIGHER, LOWER, HIGHER), higher/lower gagnent
+    // alternativement et atteignent 3-3 après 6 matchs, décidant au 7e.
+    const homeWinsAt = [true, false, false, true, true, true, true];
+    let call = 0;
+    const contexts: GameContextInfo[] = [];
+    const alternating: GameSimulator = (_home, _away, _rng, context) => {
+      contexts.push(context);
+      const homeWins = homeWinsAt[call]!;
+      call++;
+      return homeWins ? { homeScore: 100, awayScore: 90 } : { homeScore: 90, awayScore: 100 };
+    };
+    const result = simulateSeries(rng, "HIGH", "LOW", alternating, "FINALS");
+
+    expect(result.gamesPlayed).toBe(7);
+    expect(contexts).toHaveLength(7);
+    expect(contexts[6]!.isGame7).toBe(true);
+    expect(contexts[6]!.isEliminationGame).toBe(true);
+    expect(contexts.slice(0, 5).every((c) => c.isGame7 === false)).toBe(true);
   });
 });

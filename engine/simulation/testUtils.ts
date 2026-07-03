@@ -144,7 +144,14 @@ export function makeGameState(homeFive: Player[], awayFive: Player[], overrides?
     },
     gameStamina: Object.fromEntries([...homeFive, ...awayFive].map((p) => [p.id, 100])),
     injuries: {},
-    context: { homeTeamId: "home", awayTeamId: "away" },
+    variance: Object.fromEntries([...homeFive, ...awayFive].map((p) => [p.id, 1])),
+    context: {
+      homeTeamId: "home",
+      awayTeamId: "away",
+      gameTier: "REGULAR_SEASON",
+      isEliminationGame: false,
+      isGame7: false,
+    },
     ...overrides,
   };
 }

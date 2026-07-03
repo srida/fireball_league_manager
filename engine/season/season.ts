@@ -8,8 +8,15 @@ import { generateSchedule } from "./schedule.js";
 import { computeStandings, standingsForConference, type TeamStanding } from "./standings.js";
 import { runConferenceBracket, runFinals, runPlayIn, type BracketResult, type SeriesResult } from "./playoffs.js";
 import { simulateGame } from "../simulation/game.js";
+import { effectiveInjuryGamesOut } from "../simulation/mental.js";
 import type { RNG } from "../utils/rng.js";
-import type { Event, Game, League, Player, Team } from "../types/index.js";
+import type { Event, Game, GameContextInfo, League, Player, Team } from "../types/index.js";
+
+const REGULAR_SEASON_CONTEXT: GameContextInfo = {
+  gameTier: "REGULAR_SEASON",
+  isEliminationGame: false,
+  isGame7: false,
+};
 
 export interface SeasonResult {
   regularSeasonGames: Game[];
@@ -43,9 +50,18 @@ interface PlayerAvailability {
  * moteur de possession (`simulateGame`) reste pur, cette fermeture est la
  * seule couche qui fait persister `fitness`/blessures d'un match au suivant,
  * pour la saison régulière comme pour le play-in et les playoffs (même
- * fermeture réutilisée par tout `simulateSeason`).
+ * fermeture réutilisée par tout `simulateSeason`). Accepte aussi un
+ * `GameContextInfo` (plan P2 §Session 3 — gameTier/élimination/game 7), fourni
+ * par playoffs.ts pour le play-in/playoffs/finales, défaut saison régulière
+ * pour les matchs de calendrier ; applique aussi le retour de blessure accéléré
+ * du trait Guerrier (`effectiveInjuryGamesOut`, mental.ts).
  */
 function playRealGame(rng: RNG, teamById: Map<string, Team>) {
+  const playerById = new Map<string, Player>();
+  for (const team of teamById.values()) {
+    for (const player of team.roster) playerById.set(player.id, player);
+  }
+
   const availability = new Map<string, PlayerAvailability>();
   const getAvailability = (playerId: string): PlayerAvailability => {
     let a = availability.get(playerId);
@@ -79,7 +95,7 @@ function playRealGame(rng: RNG, teamById: Map<string, Team>) {
     return { roster, startingFitness };
   }
 
-  return (homeTeamId: string, awayTeamId: string): RealGameResult => {
+  return (homeTeamId: string, awayTeamId: string, context: GameContextInfo = REGULAR_SEASON_CONTEXT): RealGameResult => {
     const home = teamById.get(homeTeamId) as Team;
     const away = teamById.get(awayTeamId) as Team;
 
@@ -96,6 +112,7 @@ function playRealGame(rng: RNG, teamById: Map<string, Team>) {
       awayTactics: away.tactics,
       homeStartingFitness: homePrep.startingFitness,
       awayStartingFitness: awayPrep.startingFitness,
+      context,
     });
 
     for (const [playerId, minutes] of Object.entries(minutesPlayed)) {
@@ -103,7 +120,9 @@ function playRealGame(rng: RNG, teamById: Map<string, Team>) {
       a.fitness = Math.max(0, a.fitness - minutes * FATIGUE.fitnessWearPerMinute);
     }
     for (const injury of injuries) {
-      getAvailability(injury.playerId).injuryGamesRemaining = injury.gamesOut;
+      const player = playerById.get(injury.playerId);
+      const gamesOut = player ? effectiveInjuryGamesOut(player, injury.gamesOut) : injury.gamesOut;
+      getAvailability(injury.playerId).injuryGamesRemaining = gamesOut;
     }
 
     return { homeScore: game.homeScore, awayScore: game.awayScore, events: game.events };
@@ -155,7 +174,7 @@ export function simulateSeason(rng: RNG, league: League): SeasonResult {
     const playInResult = runPlayIn(
       rng,
       { seven: seedsSeven, eight: seedsEight, nine: seedsNine, ten: seedsTen },
-      (home, away) => playGame(home, away),
+      (home, away, _rng, context) => playGame(home, away, context),
     );
     playIn[conference] = playInResult;
 
@@ -165,7 +184,7 @@ export function simulateSeason(rng: RNG, league: League): SeasonResult {
       { teamId: playInResult.eighthSeedTeamId, seed: 8 },
     ];
 
-    const bracket = runConferenceBracket(rng, top8, (home, away) => playGame(home, away));
+    const bracket = runConferenceBracket(rng, top8, (home, away, _rng, context) => playGame(home, away, context));
     conferenceBrackets[conference] = bracket;
 
     const overallRank = standings.findIndex((s) => s.teamId === bracket.championTeamId);
@@ -176,7 +195,7 @@ export function simulateSeason(rng: RNG, league: League): SeasonResult {
   if (!champA || !champB) {
     throw new Error("simulateSeason: deux champions de conférence attendus pour les Finales");
   }
-  const finals = runFinals(rng, champA, champB, (home, away) => playGame(home, away));
+  const finals = runFinals(rng, champA, champB, (home, away, _rng, context) => playGame(home, away, context));
 
   return {
     regularSeasonGames,

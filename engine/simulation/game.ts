@@ -12,11 +12,13 @@
  */
 import { PACE } from "../config/tuning.js";
 import { applyFatigueDrain, checkInjuries } from "./fatigue.js";
+import { applyVarianceToSkills, computeVarianceFactor } from "./mental.js";
 import { resolvePossession } from "./possession.js";
 import { buildRotationPlan, createGameRotationState, decideSubstitutions, playerRating } from "./rotation.js";
 import type { RNG } from "../utils/rng.js";
 import type {
   Game,
+  GameContextInfo,
   GameState,
   InjurySeverity,
   OnCourtPlayer,
@@ -47,9 +49,10 @@ export function pickStartingFive(roster: readonly Player[]): Player[] {
   return five;
 }
 
-function toOnCourt(player: Player): OnCourtPlayer {
+function toOnCourt(player: Player, varianceFactor: number): OnCourtPlayer {
   // P1/P2 : seuls physical/skills sont actifs dans la simulation (spec-player-model §9).
-  return { player, effective: { ...player.physical, ...player.skills } };
+  // P2 Session 3 : variance de performance par match (métronome/erratique) appliquée aux skills.
+  return { player, effective: { ...player.physical, ...applyVarianceToSkills(player.skills, varianceFactor) } };
 }
 
 export interface SimulateGameOptions {
@@ -67,7 +70,19 @@ export interface SimulateGameOptions {
    */
   homeStartingFitness?: Readonly<Record<string, number>>;
   awayStartingFitness?: Readonly<Record<string, number>>;
+  /**
+   * Enjeu du match (plan P2 §Session 3 : gameTier/élimination/game 7), fourni par
+   * season.ts. Défaut : saison régulière sans enjeu particulier (tests unitaires/
+   * propriétés, cohérent avec P1/Session 1-2 où le contexte n'existait pas).
+   */
+  context?: GameContextInfo;
 }
+
+const DEFAULT_GAME_CONTEXT: GameContextInfo = {
+  gameTier: "REGULAR_SEASON",
+  isEliminationGame: false,
+  isGame7: false,
+};
 
 export interface SimulatedGame {
   game: Game;
@@ -85,6 +100,10 @@ export interface SimulatedGame {
 
 /** Simule un match complet, possession par possession, jusqu'à la fin du temps réglementaire ou des prolongations. */
 export function simulateGame(rng: RNG, options: SimulateGameOptions): SimulatedGame {
+  const variance: Record<string, number> = {};
+  for (const p of options.homeRoster) variance[p.id] = computeVarianceFactor(p, rng);
+  for (const p of options.awayRoster) variance[p.id] = computeVarianceFactor(p, rng);
+
   const homeFive = pickStartingFive(options.homeRoster);
   const awayFive = pickStartingFive(options.awayRoster);
 
@@ -113,7 +132,10 @@ export function simulateGame(rng: RNG, options: SimulateGameOptions): SimulatedG
     teamFouls: { HOME: 0, AWAY: 0 },
     personalFouls: {},
     possession: rng.bool(0.5) ? "HOME" : "AWAY",
-    onCourt: { HOME: homeFive.map(toOnCourt), AWAY: awayFive.map(toOnCourt) },
+    onCourt: {
+      HOME: homeFive.map((p) => toOnCourt(p, variance[p.id] ?? 1)),
+      AWAY: awayFive.map((p) => toOnCourt(p, variance[p.id] ?? 1)),
+    },
     tactics: { HOME: options.homeTactics, AWAY: options.awayTactics },
     rotation: {
       HOME: createGameRotationState(buildRotationPlan(options.homeRoster)),
@@ -121,7 +143,12 @@ export function simulateGame(rng: RNG, options: SimulateGameOptions): SimulatedG
     },
     gameStamina,
     injuries: {},
-    context: { homeTeamId: options.homeTeamId, awayTeamId: options.awayTeamId },
+    variance,
+    context: {
+      homeTeamId: options.homeTeamId,
+      awayTeamId: options.awayTeamId,
+      ...(options.context ?? DEFAULT_GAME_CONTEXT),
+    },
   };
 
   const rosterBySide = { HOME: options.homeRoster, AWAY: options.awayRoster } as const;

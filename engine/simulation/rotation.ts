@@ -6,6 +6,7 @@
  * toujours immédiate, quelle que soit la minute du match.
  */
 import { PACE, ROTATION } from "../config/tuning.js";
+import { applyVarianceToSkills } from "./mental.js";
 import { POSITIONS } from "../types/index.js";
 import type {
   Event,
@@ -177,9 +178,13 @@ export function decideSubstitutions(
     onCourtIds.delete(playerId);
     onCourtIds.add(replacementPlayer.id);
     rotationState.stintStartSeconds[replacementPlayer.id] = elapsed;
+    const varianceFactor = state.variance[replacementPlayer.id] ?? 1;
     onCourt = (onCourt ?? [...original]).map((p) =>
       p.player.id === playerId
-        ? { player: replacementPlayer, effective: { ...replacementPlayer.physical, ...replacementPlayer.skills } }
+        ? {
+            player: replacementPlayer,
+            effective: { ...replacementPlayer.physical, ...applyVarianceToSkills(replacementPlayer.skills, varianceFactor) },
+          }
         : p,
     );
   }

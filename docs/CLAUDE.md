@@ -46,8 +46,8 @@ Jeu de gestion de franchise de basket inspiré de Football Manager. La ligue fic
 
 Chaque phase livre un jeu jouable complet, validé en batch avant de passer à la suivante. Le détail complet est dans `docs/plan-developpement.md`.
 
-- **Phase 1 (en cours)** : moteur de simulation + saison complète. Génération de 30 équipes/joueurs (attributs minimaux : tir 2pts, tir 3pts, passe, rebond, défense, physique), match possession par possession, saison 82 matchs, classement, playoffs. Validation : moyennes ~110-120 pts, meilleurs scoreurs ~25-32 pts, avantage domicile ~55-60 %, saison simulée en < 1 min.
-- **Phase 2** : tactiques (pace, orientation 3pts, agressivité défensive), rotations/minutes, fatigue, blessures, mode match live avec interventions.
+- **Phase 1** : moteur de simulation + saison complète. Génération de 30 équipes/joueurs (attributs minimaux : tir 2pts, tir 3pts, passe, rebond, défense, physique), match possession par possession, saison 82 matchs, classement, playoffs. Validation : moyennes ~110-120 pts, meilleurs scoreurs ~25-32 pts, avantage domicile ~55-60 %, saison simulée en < 1 min.
+- **Phase 2 (en cours)** : tactiques (pace, orientation 3pts, agressivité défensive), rotations/minutes, fatigue, blessures, mode match live avec interventions.
 - **Phase 3** : draft (lottery + 2 tours), scouting avec incertitude, progression/vieillissement/retraites, classes de draft générées, Summer League. Validation : ligue crédible après 20 saisons batch.
 - **Phase 4** : contrats simplifiés (montant + durée, cap dur), free agency UFA, exigences salariales, IA des 29 GM (rebuild/contender/win-now), trades simples, confiance du propriétaire (licenciement = game over).
 - **Phase 5** : cap NBA complet via `cba-engine` — soft cap, Bird Rights, MLE/BAE, luxury tax + aprons 1 & 2, cap holds, RFA/qualifying offers, rookie scale, max/supermax, options, trades complets (matching, TPE, Stepien, protections de picks), two-way, waivers, stretch.

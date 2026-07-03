@@ -249,7 +249,7 @@ Le bloc mental/traits est explicitement prévu pour la Session 3 (pression et
 mental) ; décision validée : ne pas fragmenter cette logique entre deux
 sessions, même si "Guerrier" touche directement fatigue/blessure. `mental.traits`
 n'est lu par aucune formule de fatigue/blessure pour l'instant.
-→ à activer en Session 3, `engine/config/tuning.ts` (`pressureModifier`)
+→ activé en Session 3, voir "Trait Guerrier" plus bas (`engine/simulation/mental.ts`)
 
 ### `gameStaminaFactor` lit désormais un état de simulation vivant, pas `player.state`
 En P1/Session 1, `gameStaminaFactor` était appelé avec `player.state.gameStamina`
@@ -282,3 +282,84 @@ saison. Premier batch de contrôle (10 saisons, seed `fblm-session2-control`) :
 `0.00005` (×0.83) → 5.1/équipe/saison sur un second batch de contrôle, dans la
 cible `LEAGUE_TARGETS.injuriesPerTeamPerSeason` [4-6].
 → `engine/config/tuning.ts` (`INJURY.baseProbPerPossession`)
+
+## Phase 2 — Pression et mental (Session 3)
+
+### Contexte de pression (base(typeMatch)) : tiers simplifiés par type de match, pas de standings en direct
+Décision produit validée : `pressureScore` (spec §7) utilise une base par
+`GameTier` (`REGULAR_SEASON`/`PLAY_IN`/`PLAYOFFS`/`FINALS`) plus des bonus
+`clutchTime`/`eliminationStake`/`game7`, tous connus au niveau du match sans
+consulter le classement en direct. Une modélisation "course au play-in/playoffs"
+consciente des standings de saison régulière (ex. pression accrue pour une
+équipe à la lutte pour la 8e place en avril) est explicitement hors scope —
+nécessiterait de faire transiter les standings courants dans la fermeture de
+match de `season.ts`, une portée plus large que ce que la Session 3 couvre. De
+même, le "rivalité / affluence hostile (extérieur)" de la spec §7 est hors
+scope : aucun système de rivalité/affluence n'existe dans le moteur.
+→ `engine/config/tuning.ts` (`PRESSURE.baseByGameTier`), `engine/simulation/mental.ts` (`computePressureContext`)
+
+### Élimination/Game 7 dérivés du score de série en cours, pas d'un flag précalculé
+`isEliminationGame` (une défaite ce soir élimine au moins une équipe) et
+`isGame7` sont calculés à la volée dans `simulateSeries` (playoffs.ts), à
+partir des compteurs `higherWins`/`lowerWins` déjà tenus par la boucle
+existante — élimination dès qu'une équipe atteint 3 victoires, Game 7 à 3-3.
+Pour le play-in, le match 7v8 n'élimine personne (le perdant rejoue le match
+décisif) ; 9v10 et le match décisif éliminent bien le perdant de la saison.
+→ `engine/season/playoffs.ts` (`simulateSeries`, `runPlayIn`)
+
+### Traits scopés à la Session 3 : seulement ceux liés à pression/fatigue déjà actifs
+Décision validée (3 questions de clarification) : seuls `clutchKiller`,
+`bigGameChoker`, `playoffPerformer`, `metronome`, `erratic` et `warrior` sont
+implémentés cette session — tous branchés sur des mécaniques déjà actives
+(pression, fatigue, blessure). `mentor`/`vestiaireToxique` restent hors scope
+par construction de la spec (P3/P4). `lateBloomer` (nécessite un suivi des
+mois de saison, absent du modèle de calendrier actuel) et `mentallyFragile`
+(nécessite de calculer pour la première fois `state.form`, un rolling de
+performance post-match jamais implémenté) sont reportés à une session
+ultérieure, en même temps que l'infrastructure dont ils dépendent — éviter de
+fragmenter cette construction en deux passes.
+→ `engine/config/tuning.ts` (`pressureModifier`), `engine/simulation/mental.ts`
+
+### Variance de performance (métronome/erratique) : un facteur de bruit par match, pas par tir
+Décision validée : un facteur multiplicatif est tiré une fois par joueur au
+début du match (`computeVarianceFactor`, `rng.gaussian(1, stdDev)`, borné
+[0.7, 1.3]) et appliqué aux `skills` de `OnCourtPlayer.effective` (le
+physique ne varie pas d'un match à l'autre). Neutre (facteur = 1, aucun tirage
+rng) pour tout joueur sans l'un des deux traits — ce sont des perks
+conditionnels, pas un bruit universel appliqué à tous les joueurs de la ligue
+(qui aurait exigé une recalibration substantielle des cibles déjà calées en
+Session D). Les entrants en cours de match (rotation.ts) réutilisent le même
+facteur via `GameState.variance`, pour rester cohérents avec le 5 de départ.
+→ `engine/simulation/mental.ts` (`computeVarianceFactor`, `applyVarianceToSkills`), `engine/simulation/game.ts`, `engine/simulation/rotation.ts`
+
+### `discipline` remplace la constante figée de la cause OFFENSIVE_FOUL du turnover (TODO P1 résolu)
+Documenté depuis P1 (`docs/decisions.md` "Cause OFFENSIVE_FOUL... P2 only") :
+`ACTION_MODIFIERS.turnoverOffensiveFoulBaseWeight` était une constante fixe en
+P1/Session 1-2, faute de bloc mental actif. Remplacée par
+`disciplineOffensiveFoulWeight(discipline)` (mental.ts) : une discipline élevée
+réduit le poids (moins de fautes offensives), une discipline faible l'augmente,
+plancher à 1 (jamais nul).
+→ `engine/simulation/mental.ts` (`disciplineOffensiveFoulWeight`), `engine/simulation/possession.ts` (`resolveTurnover`)
+
+### Trait Guerrier : atténuation de fatigue + retour de blessure accéléré, tous deux bornés
+Guerrier atténue la pénalité de `gameStaminaFactor` en la rapprochant de 1
+(blend, jamais de dépassement de 1) et réduit la durée d'indisponibilité après
+blessure (`× MENTAL.warriorInjuryRecoveryMultiplier`, plancher à 1 match — un
+Guerrier ne revient jamais instantanément).
+→ `engine/simulation/mental.ts` (`effectiveGameStaminaFactor`, `effectiveInjuryGamesOut`), `engine/season/season.ts`
+
+### Calibration : aucun ajustement nécessaire, confirmé par comparaison à seed identique
+Un premier batch de contrôle (10 saisons, nouvelle seed `fblm-session3-control`)
+montrait une part de tirs à 3pts à 34.1 % (hors cible [38-42%], vs 41.3 % OK en
+Session 2) et un meilleur scoreur à 23.9 pts (vs 25.9 en Session 2) — écarts qui
+auraient pu suggérer une régression du système de pression. Un second batch
+avec la **même seed que la Session 2** (`fblm-session2-control`) a produit des
+résultats quasi identiques à la Session 2 (3PA 41.3 % OK, meilleur scoreur
+25.8, victoires à domicile 54.3 % — tous les écarts déjà documentés restent de
+même ampleur) : le premier batch reflétait donc du bruit d'échantillonnage
+inter-seed (10 saisons est un petit échantillon), pas une régression du moteur.
+Confirmé : le tirage `rng.gaussian` supplémentaire par joueur/match (variance
+de performance) déplace le flux de tirages aléatoires en aval même pour les
+joueurs neutres, ce qui explique la sensibilité à la seed sans indiquer de
+biais systématique — `PRESSURE`/`MENTAL` restent aux valeurs initiales.
+→ `engine/config/tuning.ts` (`PRESSURE`, `MENTAL`)

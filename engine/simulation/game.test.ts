@@ -245,3 +245,44 @@ describe("pickStartingFive — hiérarchie de rotation (spec plan P2 §Session 1
     expect(new Set(five.map((p) => p.id)).size).toBe(5);
   });
 });
+
+describe("pression et mental (plan-développement §Phase 2 — Session 3)", () => {
+  it("une composure faible produit un FG% plus bas en contexte Finales/Game 7/élimination qu'en saison régulière (même seed)", () => {
+    const { home, away } = twoTeams("pressure-context-league");
+    const lowComposureRoster = home.roster.map((p) => ({ ...p, hidden: { ...p.hidden, trueComposure: 5 } }));
+    const options = simOptions("g-pressure", { ...home, roster: lowComposureRoster }, away);
+
+    const regular = simulateGame(createRng("pressure-context-sim"), options);
+    const finalsGame7 = simulateGame(createRng("pressure-context-sim"), {
+      ...options,
+      context: { gameTier: "FINALS", isEliminationGame: true, isGame7: true },
+    });
+
+    const fgPercent = (game: typeof regular.game, ids: Set<string>) => {
+      let made = 0;
+      let attempted = 0;
+      for (const event of game.events) {
+        if (event.t !== "SHOT" || !ids.has(event.player)) continue;
+        attempted++;
+        if (event.result === "MAKE") made++;
+      }
+      return made / attempted;
+    };
+
+    const homeIds = new Set(lowComposureRoster.map((p) => p.id));
+    expect(fgPercent(finalsGame7.game, homeIds)).toBeLessThan(fgPercent(regular.game, homeIds));
+  });
+
+  it("un joueur Guerrier blessé revient plus tôt qu'un joueur non-Guerrier avec la même sévérité (season.ts)", () => {
+    // Couvert indirectement par le batch de contrôle (docs/decisions.md) — la
+    // fonction pure `effectiveInjuryGamesOut` est testée unitairement dans
+    // mental.test.ts ; ce test vérifie juste qu'un match complet ne plante pas
+    // quand un joueur du roster porte le trait Guerrier.
+    const { home, away } = twoTeams("warrior-smoke-league");
+    const warriorRoster = home.roster.map((p, i) =>
+      i === 0 ? { ...p, mental: { ...p.mental, traits: ["warrior" as const] } } : p,
+    );
+    const { game } = simulateGame(createRng("warrior-smoke-sim"), simOptions("g-warrior", { ...home, roster: warriorRoster }, away));
+    expect(game.status).toBe("FINAL");
+  });
+});

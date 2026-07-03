@@ -1,11 +1,13 @@
 import type {
   ArchetypeId,
   DefensiveAggressiveness,
+  GameTier,
   InjurySeverity,
   OffensiveOrientation,
   Pace,
   Position,
   PlayerSkills,
+  PressureContext,
   Trait,
 } from "../types/index.js";
 
@@ -104,9 +106,10 @@ export const ACTION_MODIFIERS = {
   /** ⚙ Poids finishing/postPlay (attaque du cercle) dans p(faute subie). Valeur initiale — à calibrer. */
   foulDrawnAttackWeight: 0.003,
   /**
-   * ⚙ Poids de base de la cause "OFFENSIVE_FOUL" dans le tirage du turnover.
-   * `discipline` (mental) n'étant actif qu'en P2, ce poids reste une constante
-   * jusqu'à son remplacement par un modificateur basé sur `discipline` en P2.
+   * ⚙ Poids de base de la cause "OFFENSIVE_FOUL" dans le tirage du turnover,
+   * modulé depuis la Session 3 par `MENTAL.disciplineOffensiveFoulWeight` et
+   * `discipline` du porteur (`resolveTurnover`, possession.ts) — remplace la
+   * constante figée utilisée en P1/Session 1-2 (docs/decisions.md).
    * Valeur initiale — à calibrer.
    */
   turnoverOffensiveFoulBaseWeight: 15,
@@ -184,7 +187,8 @@ export const AND_ONE = {
 export const FREE_THROW = {
   /**
    * ⚙ Malus de % de réussite (points de %, ex. 0.03 = -3pts) si pressureScore
-   * élevé et composure faible. P2 — non appliqué en P1 (pressureScore inactif).
+   * ≥ `PRESSURE.highPressureThreshold` et `trueComposure` sous la neutre.
+   * Actif depuis la Session 3 (`resolveFreeThrows`, possession.ts).
    */
   pressurePenalty: 0.03,
 } as const;
@@ -430,18 +434,103 @@ export const INJURY = {
 } as const;
 
 // ---------------------------------------------------------------------------
+// Pression et mental (P2, plan-développement §Phase 2 — Session 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * ⚙ pressureScore = base(gameTier) + clutchTime + eliminationStake + game7
+ * (spec-player-model §7). Le "rivalité / affluence hostile" de la spec est
+ * hors scope (aucun système de rivalité/affluence n'existe — décision session 3,
+ * voir docs/decisions.md). Valeurs initiales — à calibrer.
+ */
+export const PRESSURE = {
+  baseByGameTier: {
+    REGULAR_SEASON: 10,
+    PLAY_IN: 40,
+    PLAYOFFS: 50,
+    FINALS: 65,
+  } satisfies Record<GameTier, number>,
+  /** Définition littérale du "clutch time" (spec §7) : écart ≤ 5 pts ET ≤ 5 min au Q4/OT. */
+  clutchScoreMarginMax: 5,
+  clutchClockSecondsMax: 5 * 60,
+  clutchTimeBonus: 20,
+  eliminationBonus: 20,
+  game7Bonus: 15,
+  /** `trueComposure` moyen de génération (`PLAYER_GENERATION.hidden.trueComposure.mean`) → modificateur neutre. */
+  composureNeutral: 55,
+  /** ⚙ sensibilité du modificateur au produit (écart de composure × pressureScore). */
+  composureSensitivity: 0.006,
+  /** ⚙ malus max ~-15 à -20 % au pic de pression pour composure faible (spec §7). */
+  maxMalus: 0.2,
+  /** ⚙ léger boost au-delà de la composure neutre au pic de pression (spec §7 "boostés au-delà de 90"). */
+  maxBoost: 0.06,
+  /** ⚙ Seuil de pressureScore au-delà duquel le malus de lancers francs (FREE_THROW.pressurePenalty) s'applique. */
+  highPressureThreshold: 55,
+  /** ⚙ Bonus/malus des traits "Tueur du money time"/"Peur des grands matchs", déclenchés par isClutchTime (moment littéral, pas le score composite). */
+  clutchKillerBonus: 0.08,
+  bigGameChokerMalus: 0.12,
+  /** ⚙ Trait "Joueur de playoffs" : bonus play-in/playoffs/finales, léger malus en saison régulière. */
+  playoffPerformerBonus: 0.04,
+  playoffPerformerRegularSeasonMalus: 0.02,
+  /** ⚙ Bornes finales du modificateur de pression, toutes causes cumulées. */
+  minModifier: 0.65,
+  maxModifier: 1.15,
+  /** ⚙ `leadership` neutre (fourchette de génération mentale [20,95], centre ~57). */
+  leadershipNeutral: 50,
+  /** ⚙ sensibilité du buffer de leadership (amortit le malus des coéquipiers, jamais soi-même — spec §7). */
+  leadershipBufferSensitivity: 0.002,
+} as const;
+
+/**
+ * ⚙ Modificateurs mentaux hors pression : discipline (turnover), variance de
+ * performance (métronome/erratique), et bonus Guerrier (spec §4.2, plan P2 §Session 3).
+ */
+export const MENTAL = {
+  /**
+   * ⚙ discipline réduit le poids de base de la cause OFFENSIVE_FOUL du turnover
+   * (remplace la constante figée `ACTION_MODIFIERS.turnoverOffensiveFoulBaseWeight`
+   * utilisée en P1/Session 1-2, TODO documenté depuis P1 — voir docs/decisions.md).
+   */
+  disciplineOffensiveFoulWeight: 0.008,
+  /** ⚙ Guerrier : atténue la pénalité de fatigue (blend vers 1) et accélère le retour de blessure. */
+  warriorFatiguePenaltyReduction: 0.4,
+  warriorInjuryRecoveryMultiplier: 0.7,
+  /** ⚙ Écart-type du bruit de variance de performance par match (spec "peu/beaucoup de très bons-mauvais matchs"). */
+  metronomeVarianceStdDev: 0.03,
+  erraticVarianceStdDev: 0.1,
+  /** ⚙ Bornes du facteur de bruit, centré sur 1 — évite les extrêmes déraisonnables. */
+  varianceFactorMin: 0.7,
+  varianceFactorMax: 1.3,
+} as const;
+
+/**
+ * Modificateur de pression (spec-player-model.md §7) : composure/traits/leadership
+ * pilotent les attributs effectifs en fonction du contexte de match. Actif dès
+ * la Session 3 (P2) — identité en Session 1-2 (`pressureScore` toujours à 0).
+ */
+export function pressureModifier(trueComposure: number, traits: readonly Trait[], context: PressureContext): number {
+  const { pressureScore, isClutchTime, gameTier } = context;
+
+  const composureDelta = trueComposure - PRESSURE.composureNeutral;
+  let mod = 1 + (composureDelta * pressureScore * PRESSURE.composureSensitivity) / 100;
+  mod = Math.max(1 - PRESSURE.maxMalus, Math.min(1 + PRESSURE.maxBoost, mod));
+
+  if (isClutchTime) {
+    if (traits.includes("clutchKiller")) mod *= 1 + PRESSURE.clutchKillerBonus;
+    if (traits.includes("bigGameChoker")) mod *= 1 - PRESSURE.bigGameChokerMalus;
+  }
+
+  if (traits.includes("playoffPerformer")) {
+    mod *= gameTier === "REGULAR_SEASON" ? 1 - PRESSURE.playoffPerformerRegularSeasonMalus : 1 + PRESSURE.playoffPerformerBonus;
+  }
+
+  return Math.max(PRESSURE.minModifier, Math.min(PRESSURE.maxModifier, mod));
+}
+
+// ---------------------------------------------------------------------------
 // Hooks prévus par les specs — actifs à partir de P2, renvoient 1 en P1
 // (CLAUDE.md — scope P1 : "Les hooks... existent mais renvoient 1.")
 // ---------------------------------------------------------------------------
-
-/** Modificateur de pression (spec-player-model.md §7). P3 (traits/pression complets en Session 3) — identité pour l'instant. */
-export function pressureModifier(
-  _trueComposure: number,
-  _traits: readonly Trait[],
-  _pressureScore: number,
-): number {
-  return 1;
-}
 
 /** Facteur de stamina intra-match (spec-possession-algorithm.md §3, plan P2 §Session 2). */
 export function gameStaminaFactor(gameStamina: number): number {
