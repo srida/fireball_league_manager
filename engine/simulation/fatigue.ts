@@ -5,18 +5,13 @@
  * la génération. Seule la fitness de fin de saison précédente (season.ts)
  * initialise la valeur de départ d'un match.
  */
-import { FATIGUE, INJURY, PLAYER_GENERATION } from "../config/tuning.js";
+import { FATIGUE, INJURY } from "../config/tuning.js";
 import type { RNG } from "../utils/rng.js";
 import type { Event, GameState, InjurySeverity, Player, TeamSide } from "../types/index.js";
 
-const MS_PER_YEAR = 365.25 * 24 * 60 * 60 * 1000;
-
-/** Âge dérivé au moment de la simulation (référence : date de génération de la ligue, spec-player-model §1). */
-export function deriveAge(birthDate: string, referenceDate: string = PLAYER_GENERATION.referenceDate): number {
-  const ref = new Date(`${referenceDate}T00:00:00Z`).getTime();
-  const birth = new Date(`${birthDate}T00:00:00Z`).getTime();
-  return Math.floor((ref - birth) / MS_PER_YEAR);
-}
+/** Ré-exporté depuis `players/age.ts` (Session 1, phase 3) — même fonction, nouveau domicile. */
+export { deriveAge } from "../players/age.js";
+import { deriveAge } from "../players/age.js";
 
 /**
  * Décroissance (joueurs sur le terrain) et récupération (joueurs au banc) de

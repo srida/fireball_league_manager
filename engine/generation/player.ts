@@ -20,7 +20,7 @@ import type {
 } from "../types/index.js";
 import { POSITIONS } from "../types/index.js";
 
-const SKILL_KEYS = [
+export const SKILL_KEYS = [
   "finishing",
   "midRange",
   "threePoint",
@@ -38,7 +38,7 @@ const SKILL_KEYS = [
   "defensiveIQ",
 ] as const satisfies readonly (keyof PlayerSkills)[];
 
-const PHYSICAL_KEYS = [
+export const PHYSICAL_KEYS = [
   "speed",
   "vertical",
   "strength",

@@ -3,7 +3,7 @@ import { ARCHETYPE_POSITIONS, LEAGUE_GENERATION, PLAYER_GENERATION } from "../co
 import { POSITIONS, type ArchetypeId, type Player, type Position } from "../types/index.js";
 import { generatePlayer } from "./player.js";
 
-function archetypesForPosition(position: Position): ArchetypeId[] {
+export function archetypesForPosition(position: Position): ArchetypeId[] {
   return (Object.keys(ARCHETYPE_POSITIONS) as ArchetypeId[]).filter((archetype) =>
     ARCHETYPE_POSITIONS[archetype].includes(position),
   );
@@ -20,6 +20,21 @@ function assignJerseyNumbers(rng: RNG, players: Player[]): void {
     used.add(number);
     player.jerseyNumber = number;
   }
+}
+
+/**
+ * Tire un numéro de maillot libre (0-99) pour un joueur rejoignant `existing`
+ * (remplaçant d'intersaison, rookie drafté) — même règle que la génération
+ * initiale d'un roster (`assignJerseyNumbers`), réutilisée partout où un seul
+ * joueur s'ajoute à un roster déjà constitué.
+ */
+export function pickFreeJerseyNumber(rng: RNG, existing: readonly Player[]): number {
+  const used = new Set(existing.map((p) => p.jerseyNumber));
+  let number: number;
+  do {
+    number = rng.int(PLAYER_GENERATION.jerseyNumber.min, PLAYER_GENERATION.jerseyNumber.max);
+  } while (used.has(number));
+  return number;
 }
 
 /**

@@ -2,6 +2,7 @@ import type {
   ArchetypeId,
   DefensiveAggressiveness,
   GameTier,
+  GrowthCurve,
   InjurySeverity,
   OffensiveOrientation,
   Pace,
@@ -595,6 +596,8 @@ export const LEAGUE_TARGETS = {
   calibrationSeasons: 50,
   /** ⚙ Blessures significatives par équipe et par saison (plan-développement §Phase 2 — Session 2). */
   injuriesPerTeamPerSeason: { min: 4, max: 6 },
+  /** ⚙ Âge moyen de la ligue, batch multi-saisons (plan-développement §Phase 3 — Session 1 : "âge moyen ~26 ans, stable"). */
+  leagueAverageAge: { min: 24, max: 28 },
 } as const;
 
 /**
@@ -793,6 +796,145 @@ export const ARCHETYPE_SKILL_PROFILES: Record<ArchetypeId, ArchetypeSkillProfile
     medium: ["offBallDefense", "defensiveIQ"],
     weak: ["finishing", "midRange", "threePoint", "freeThrow", "ballHandling", "passing", "courtVision", "postPlay"],
   },
+} as const;
+
+// ---------------------------------------------------------------------------
+// Progression, vieillissement, retraites (P3, plan-développement §Phase 3 — Session 1)
+// ---------------------------------------------------------------------------
+
+/**
+ * ⚙ Courbes de carrière (spec-player-model.md §5 : `potential`, `growthCurve`,
+ * `peakAge`, `declineRate`). Toutes les valeurs sont des points de départ non
+ * calibrés — curseurs du batch 20 saisons (plan-développement §Phase 3,
+ * critère "âge moyen ~26 ans, distribution stable").
+ */
+export const DEVELOPMENT = {
+  /** ⚙ Décalage (années) du pic effectif selon `growthCurve` — précoce pique/décline plus tôt, tardif plus tard. */
+  growthCurveOffsetYears: { early: -2, standard: 0, late: 2 } satisfies Record<GrowthCurve, number>,
+  /** ⚙ Le physique pique avant le technique (spec plan P3 §Session 1 : "les attributs physiques déclinent avant les techniques"). */
+  physicalPeakLeadYears: 1,
+  technicalPeakLagYears: 1,
+  /** `workEthic`/`coachability` neutres — centre de `PLAYER_GENERATION.mentalRange` [20, 95]. */
+  mentalNeutral: 57.5,
+
+  progression: {
+    /** ⚙ Gain plafond par attribut et par saison, avant tous les facteurs multiplicatifs. */
+    maxAnnualGain: 6,
+    /** ⚙ potentialFactor = clamp(gap / ce diviseur, 0, 1) — gap = potential − valeur actuelle. */
+    potentialGapDivisor: 25,
+    /** ⚙ ageFactor = clamp((peakAge − age) / span, floor, 1) — plus jeune progresse plus vite. */
+    ageFactorSpanYears: 9,
+    ageFactorFloor: 0.15,
+    /** ⚙ Poids du multiplicateur centré sur `mentalNeutral` pour workEthic/coachability. */
+    workEthicWeight: 0.5,
+    coachabilityWeight: 0.3,
+    /** ⚙ minutesFactor = clamp(minutesShare, floor, 1) — un jeune sur le banc progresse quand même un peu. */
+    minutesFloor: 0.3,
+  },
+
+  decline: {
+    /** ⚙ Perte annuelle de base une fois le pic de catégorie dépassé. Physique décline plus vite que technique. */
+    physicalBaseAnnualLoss: 1.4,
+    technicalBaseAnnualLoss: 0.9,
+    /** ⚙ declineRateFactor = base + declineRate × poids — centré ~1 pour `declineRate` moyen (50). */
+    declineRateFactorBase: 0.4,
+    declineRateFactorWeight: 0.012,
+    /** ⚙ Le déclin s'accélère avec les années passées au-delà du pic. */
+    accelerationPerYear: 0.08,
+    /** ⚙ `workEthic` atténue (ou aggrave) le déclin — plancher/plafond du facteur de mitigation. */
+    workEthicMitigationDivisor: 200,
+    mitigationFloor: 0.7,
+    mitigationCeil: 1.3,
+  },
+
+  /** ⚙ Micro-progression en cours de saison pour les jeunes à fort temps de jeu (spec plan P3 §Session 1). */
+  microProgression: {
+    maxAge: 23,
+    minMinutesShare: 0.5,
+    /** ⚙ Bonus flat additionnel sur les attributs techniques uniquement (effet "visible mais léger"). */
+    flatBonus: 0.4,
+  },
+
+  /** ⚙ Minutes de saison "pleine charge" pour normaliser `minutesShare` (~34 min × 79 matchs, titulaire type). */
+  referenceSeasonMinutes: 2686,
+
+  /**
+   * ⚙ Fourchette d'âge des remplaçants générés à l'intersaison en l'absence de
+   * draft (`offseason.ts`, filet temporaire documenté docs/decisions.md — remplacé
+   * par de vrais rookies draftés en Session 2). Volontairement plus étroite que
+   * `PLAYER_GENERATION.ageRange` [19,38] : un remplaçant "générique" pigé dans la
+   * pleine fourchette pourrait être un vétéran de 35 ans, ce qui ne renouvelle
+   * jamais la ligue et empêche l'âge moyen de se stabiliser (constaté sur batch
+   * de contrôle : ligue vieillissant sans fin, plafond ~31 ans jamais atteint
+   * par manque de sang neuf). Alignée sur la fourchette "draft" mentionnée pour
+   * la Session 2 (spec plan P3 "18-22 ans").
+   */
+  replacementAgeRange: { min: 19, max: 22 },
+
+  retirement: {
+    /**
+     * ⚙ Au-delà de cet âge, probabilité de retraite croissante avec l'âge.
+     * Calibré (batch de contrôle 20 saisons, seed `fblm-p3-session1-control`) :
+     * 34 stabilisait l'âge moyen ligue autour de ~31 ans (hors cible [24-28]) —
+     * abaissé à 32 avec une pente un peu plus forte, stabilise autour de ~26-27.
+     */
+    baseAgeThreshold: 32,
+    probPerYearOverThreshold: 0.14,
+    /** ⚙ Un joueur vieillissant ET à niveau faible part plus tôt (fin de banc, pas de rôle). */
+    lowRatingAgeThreshold: 28,
+    lowRatingThreshold: 55,
+    lowRatingProb: 0.08,
+    /** ⚙ Retraite forcée (garde-fou, aucune ligue NBA-like ne voit un joueur de 43 ans). */
+    hardRetireAge: 42,
+  },
+} as const;
+
+// ---------------------------------------------------------------------------
+// Classes de draft et lottery (P3, plan-développement §Phase 3 — Session 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * ⚙ Génération d'une classe de draft annuelle : prospects 18-22 ans, attributs
+ * techniques actuels faibles (pas encore développés) mais potentiel variable
+ * et plus dispersé qu'un joueur confirmé — plus de busts et de "steals" que la
+ * génération standard (`PLAYER_GENERATION`). Valeurs initiales — à calibrer.
+ */
+export const DRAFT_GENERATION = {
+  classSize: { min: 60, max: 70 },
+  ageRange: { min: 18, max: 22 },
+  /** ⚙ Chaque skill technique généré (génération standard) est resserré vers le bas d'un facteur multiplicatif. */
+  skillDiscount: 0.65,
+  /** ⚙ `potential` d'un prospect : variance plus large que `PLAYER_GENERATION.hidden.potential` (busts/steals). */
+  potential: { mean: 62, stdDev: 24 },
+  /**
+   * ⚙ Qualité de cuvée (bonnes/mauvaises années, spec plan P3 §Session 2) :
+   * décalage tiré une fois par classe, appliqué à la moyenne de `potential`
+   * de toute la promotion — borné pour éviter une cuvée absurdement
+   * dégénérée (`classQualityMax`).
+   */
+  classQualityStdDev: 8,
+  classQualityMax: 18,
+} as const;
+
+/**
+ * ⚙ Draft lottery (style NBA post-2019, spec plan P3 §Session 2 : "les 3 pires
+ * équipes à égalité de chances pour le pick 1"). Format de compétition repris
+ * tel quel (non protégé, CLAUDE.md — "structure de ligue... formats de
+ * compétition... repris car non protégée").
+ */
+export const DRAFT_LOTTERY = {
+  /** Équipes non qualifiées aux playoffs, éligibles à la lottery (30 équipes − 16 places de playoffs/play-in). */
+  lotteryTeamCount: 14,
+  /**
+   * Odds (pour 1000) du pick 1, indexées par rang inversé (0 = pire bilan de
+   * la ligue). Table NBA post-2019 : les 3 pires équipes à égalité (14 %
+   * chacune), somme = 1000.
+   */
+  pickOneOddsPerThousand: [140, 140, 140, 125, 105, 90, 75, 60, 45, 30, 20, 15, 10, 5],
+  /** Nombre de picks réellement tirés par la lottery (1 à 4) ; le reste suit le classement inversé. */
+  drawnPicksCount: 4,
+  /** Nombre de tours de draft (spec plan P3 §Session 2 : "draft 2 tours"). */
+  roundCount: 2,
 } as const;
 
 /** §4.2 — Traits mutuellement exclusifs par paires (spec-player-model.md §4.2). */

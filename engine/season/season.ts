@@ -24,12 +24,20 @@ export interface SeasonResult {
   conferenceBrackets: Record<string, BracketResult>;
   finals: SeriesResult;
   championTeamId: string;
+  /**
+   * Minutes totales jouées par joueur sur la saison régulière (plan-développement
+   * §Phase 3 — Session 1 : entrée de la progression annuelle, `offseason.ts`).
+   * Saison régulière uniquement (comme le hash golden master), les playoffs ne
+   * sont pas comptabilisés.
+   */
+  minutesByPlayer: Record<string, number>;
 }
 
 interface RealGameResult {
   homeScore: number;
   awayScore: number;
   events: Event[];
+  minutesPlayed: Record<string, number>;
 }
 
 /**
@@ -55,7 +63,12 @@ function playRealGame(rng: RNG, teamById: Map<string, Team>) {
     const options = driver.prepare(rng, homeTeamId, awayTeamId, context, gameDate);
     const simulated = simulateGame(rng, options);
     driver.commit(homeTeamId, awayTeamId, simulated, gameDate);
-    return { homeScore: simulated.game.homeScore, awayScore: simulated.game.awayScore, events: simulated.game.events };
+    return {
+      homeScore: simulated.game.homeScore,
+      awayScore: simulated.game.awayScore,
+      events: simulated.game.events,
+      minutesPlayed: simulated.minutesPlayed,
+    };
   };
 }
 
@@ -69,8 +82,12 @@ export function simulateSeason(rng: RNG, league: League): SeasonResult {
   const fixtures = generateSchedule(league);
   const playGame = playRealGame(rng, teamById);
 
+  const minutesByPlayer: Record<string, number> = {};
   const regularSeasonGames: Game[] = fixtures.map((f, i) => {
     const result = playGame(f.homeTeamId, f.awayTeamId, REGULAR_SEASON_CONTEXT, f.date);
+    for (const [playerId, minutes] of Object.entries(result.minutesPlayed)) {
+      minutesByPlayer[playerId] = (minutesByPlayer[playerId] ?? 0) + minutes;
+    }
     return {
       id: `game-${i}`,
       homeTeamId: f.homeTeamId,
@@ -134,6 +151,7 @@ export function simulateSeason(rng: RNG, league: League): SeasonResult {
     conferenceBrackets,
     finals,
     championTeamId: finals.winnerTeamId,
+    minutesByPlayer,
   };
 }
 

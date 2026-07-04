@@ -452,3 +452,277 @@ encore choisie (CLAUDE.md : "UI décidée plus tard, découplée du moteur").
 REBOUND et FREE_THROW individuels ne sont volontairement pas rendus ligne par
 ligne (bruit élevé pour un flux minimal) — ils restent dans le log/box score.
 → `batch/live-demo.ts`
+
+## Phase 3 — Courbes de carrière (Session 1)
+
+### `deriveAge` déplacé de `simulation/fatigue.ts` vers `players/age.ts`
+Le vieillissement multi-saisons (intersaison) est une responsabilité du domaine
+joueur, pas de la simulation de match — `players/` est le domicile désigné
+(CLAUDE.md, structure du repo). **Décision** : `deriveAge` déménagé dans
+`engine/players/age.ts` (nouvelle fonction `addYears`/`yearsBetween` au passage),
+ré-exporté depuis `fatigue.ts` pour ne rien casser côté appelants existants
+(`fatigue.test.ts` continue d'importer depuis `./fatigue.js`).
+→ `engine/players/age.ts`, `engine/simulation/fatigue.ts`
+
+### La `birthDate` d'un joueur existant n'est jamais mutée — seule la "référence" avance
+Alternative écartée : décrémenter `birthDate` d'un an à chaque intersaison pour
+simuler le vieillissement (calcul trivial, aucune plomberie supplémentaire).
+**Décision** : rejetée — un joueur ne "re-naît" pas, et la spec est explicite
+(`birthDate` : "l'âge est toujours dérivé, jamais stocké"). À la place,
+`batch/run.ts` fait avancer une `referenceDate` (`addYears(PLAYER_GENERATION.referenceDate, n)`)
+d'une saison à l'autre, et tout le calcul d'âge (progression, déclin, retraite)
+la reçoit en paramètre explicite plutôt que de dépendre d'une valeur par défaut
+figée. Limite connue et documentée : le calcul de risque de blessure
+(`fatigue.ts checkInjuries`) continue d'appeler `deriveAge` sans référence
+explicite (donc figée à la date de génération) — l'âge y reste donc celui de la
+saison 0 même en batch multi-saisons avancé. Pas corrigé cette session : cela
+demanderait de faire transiter la référence de ligue jusque dans
+`SimulateGameOptions`/`GameEngine`, une plomberie plus large que le périmètre
+Session 1 (progression/retraite à l'intersaison uniquement). À revisiter si le
+risque de blessure lié à l'âge devient un point de calibration sensible sur de
+longs batches.
+→ `engine/players/age.ts`, `engine/season/offseason.ts`, `batch/run.ts`
+
+### `potential` : plafond global unique, partagé technique + physique
+La spec (`spec-player-model.md §5`) décrit `potential` comme "plafond de
+progression global", pas un plafond par attribut. **Décision** : un seul
+scalaire (0-99) sert de ceiling à *tous* les attributs (skills et physical) —
+pas de plafond dérivé par attribut. Un joueur généré au-dessus de son propre
+`potential` (tirage d'archétype fort + potential bas, tirages indépendants,
+spec §8) n'est jamais rabaissé de force : `growAttribute` calcule un
+`effectiveCeiling = max(potential, valeurActuelle)`, qui bloque toute
+progression future sans jamais réduire un attribut déjà haut.
+→ `engine/players/development.ts`
+
+### Le physique pique avant le technique — décalage symétrique autour du pic effectif
+La spec dit seulement "les attributs physiques déclinent avant les
+techniques", sans détail chiffré. **Décision** : `physicalPeakAge = effectivePeakAge − 1`,
+`technicalPeakAge = effectivePeakAge + 1` (constantes `DEVELOPMENT.physicalPeakLeadYears`/
+`technicalPeakLagYears`) — le physique entre en phase de déclin un peu avant
+le pic "nominal" du joueur (`hidden.peakAge` décalé par `growthCurve`), le
+technique un peu après. `declineRate`/`workEthic` s'appliquent identiquement
+aux deux catégories ; seule la perte annuelle de base diffère
+(`physicalBaseAnnualLoss` > `technicalBaseAnnualLoss`), pour que le physique
+décline aussi plus *vite*, pas seulement plus tôt.
+→ `engine/config/tuning.ts` (`DEVELOPMENT`), `engine/players/development.ts`
+
+### Micro-progression en cours de saison : pliée dans la même passe annuelle, pas un vrai tick mi-saison
+La spec (plan P3 §Session 1) décrit une micro-progression "en cours de saison"
+pour les jeunes à fort temps de jeu. **Décision** : implémentée comme un bonus
+flat additionnel (`DEVELOPMENT.microProgression`) dans le même calcul de
+progression annuelle à l'intersaison (`applyAnnualDevelopment`), conditionné
+sur l'âge et la part de minutes de la saison écoulée — pas un vrai
+recalcul pendant la saison elle-même. Raison : la boucle de saison
+(`simulateSeason`) n'a aujourd'hui aucun point d'ancrage "mi-saison" (pas de
+notion de mois de saison dans le calendrier), et une vraie mutation
+d'attributs pendant la saison changerait le comportement d'un
+`simulateSeason` unique (donc casserait potentiellement le golden master, qui
+ne couvre qu'une seule saison). Cette implémentation garde le hash golden
+master intact pour cette session — l'effet reste "visible mais léger" comme
+demandé, juste appliqué au même moment que le reste de la courbe de carrière.
+→ `engine/config/tuning.ts` (`DEVELOPMENT.microProgression`), `engine/players/development.ts`
+
+### Remplacement des retraités : filler générique à fourchette d'âge dédiée, pas encore de draft
+Le draft (Session 2) n'existe pas encore ; sans remplacement, les rosters se
+viderait au fil des retraites. **Décision** : `offseason.ts` génère un
+remplaçant via `generatePlayer` (même pipeline qu'à la création de ligue) pour
+combler chaque poste sous-effectif. Premier essai : réutiliser la `birthDate`
+telle que générée par `generatePlayer` (fourchette pleine `PLAYER_GENERATION.ageRange`
+[19,38]) — **rejeté après un batch de contrôle 20 saisons** (seed
+`fblm-p3-session1-control`) : un "remplaçant" tiré dans toute la fourchette
+peut être un vétéran de 35 ans, ce qui ne renouvelle jamais la ligue ; l'âge
+moyen ne se stabilisait jamais (montée continue ~28.6 → ~31 sur 20 saisons,
+jamais de plateau). **Décision finale** : nouvelle fourchette dédiée
+`DEVELOPMENT.replacementAgeRange` (19-22 ans, alignée sur la fourchette
+"draft" mentionnée pour la Session 2), qui écrase la `birthDate` générée.
+Deuxième batch de contrôle : âge moyen stable, oscillant 25.7-28.1 sur 20
+saisons — cible atteinte. Filet temporaire documenté : remplacé par un vrai
+flux de rookies draftés dès que la Session 2 existe.
+→ `engine/config/tuning.ts` (`DEVELOPMENT.replacementAgeRange`), `engine/season/offseason.ts`
+
+### Calibration des retraites : deux passes de batch de contrôle (20 saisons)
+Premier essai (`baseAgeThreshold=34`, `probPerYearOverThreshold=0.1`) :
+combiné au filler à pleine fourchette d'âge (voir décision ci-dessus), l'âge
+moyen ligue montait sans jamais se stabiliser (~28.6 saison 1 → ~31 saison 20,
+plateau autour de 31 pas dans la cible [24-28]). Après correction du filler
+(fourchette 19-22), l'âge moyen se stabilisait déjà mieux (~28-28.8) mais
+restait au-dessus de la cible haute. **Décision finale** : `baseAgeThreshold`
+abaissé 34 → 32, `probPerYearOverThreshold` relevé 0.1 → 0.14,
+`lowRatingAgeThreshold` abaissé 30 → 28, `lowRatingProb` relevé 0.06 → 0.08.
+Batch de contrôle final (seed `fblm-p3-session1-control`, 20 saisons) : âge
+moyen oscillant 25.7-28.1, moyenne ~26.7 — dans la cible du plan-développement
+("âge moyen ~26 ans, stable"). Retraites/saison stabilisées ~20-50 (sur 450
+joueurs), sans mur ni collapse. Aucun changement nécessaire côté `DEVELOPMENT.progression`/
+`decline` : les distributions de ratings restent stables sur le même batch
+(pas de test statistique dédié cette session, cf. "Étendre les tests
+statistiques" ci-dessous).
+→ `engine/config/tuning.ts` (`DEVELOPMENT.retirement`)
+
+### Golden master inchangé cette session (contrairement à l'attente initiale)
+Le hash golden master (`tests/golden`) simule une seule saison
+(`GOLDEN_SEED`) via `simulateSeason` — l'intersaison (`runOffseason`) n'est
+jamais appelée dans ce chemin. Comme toute la logique de courbe de carrière
+n'est invoquée qu'à l'intersaison (jamais pendant une saison), le
+comportement du moteur de possession/saison reste strictement identique :
+le golden master **n'a pas eu besoin d'être régénéré** cette session (vérifié :
+`npm test` reste vert sans toucher `tests/golden/golden-hash.txt`). Il le sera
+dès qu'une session touchera la génération de ligue elle-même (Session 2 —
+draft/lottery modifient les rosters dès la saison 1 si le calendrier bat les
+picks avant la saison régulière).
+→ `tests/golden/golden-master.ts` (inchangé)
+
+### Tests étendus (mêmes 5 familles, plan-développement — principe transverse)
+- **Famille 1 (unitaires déterministes)** : `engine/players/age.test.ts`,
+  `engine/players/development.test.ts`, `engine/season/offseason.test.ts` —
+  courbes de pic, progression/déclin, bornes de retraite, taille de roster
+  après intersaison, déterminisme seedé.
+- **Famille 2 (propriétés)** : `tests/properties/development.property.test.ts`
+  — bornes [0,99] et plafond `potential` sur 200 joueurs × 25 années
+  simulées, monotonie de `retirementProbability` en âge sur 100 joueurs.
+- **Famille 3 (statistique/batch)** : `batch/run.ts` exécute désormais
+  `runOffseason` entre deux saisons et affiche un rapport démographique
+  (âge moyen ligue/saison, retraites, remplacements) contre la nouvelle cible
+  `LEAGUE_TARGETS.leagueAverageAge` (24-28) — validé sur 20 saisons de contrôle.
+  Pas de test automatisé bloquant sur ce rapport cette session (même statut
+  "warning informatif" que les autres métriques `LEAGUE_TARGETS` non encore
+  passées en bloquant, `tests/statistical/league-distributions.test.ts` reste
+  inchangé) — à envisager une fois la Session 2 stabilisée.
+- **Famille 4 (golden master)** : inchangé, voir décision ci-dessus.
+- **Famille 5 (performance)** : `runOffseason` ajoute un coût négligeable
+  (~450 joueurs, calcul O(1) par attribut) — le batch de contrôle 20 saisons
+  reste à ~12s/saison, identique à avant cette session.
+→ `engine/players/age.test.ts`, `engine/players/development.test.ts`,
+`engine/season/offseason.test.ts`, `tests/properties/development.property.test.ts`
+
+## Phase 3 — Classes de draft et lottery (Session 2)
+
+### Génération des prospects : post-traitement de `generatePlayer`, pas un pipeline dédié
+Même logique que le remplaçant générique de la Session 1 (`offseason.ts`) :
+plutôt que dupliquer physique/mental/traits, `generateDraftClass`
+(`engine/generation/draftClass.ts`) appelle `generatePlayer` puis (1) réécrit
+`birthDate` sur 18-22 ans (`randomBirthDateForAge`, `DRAFT_GENERATION.ageRange`),
+(2) resserre chaque skill technique vers le bas (`DRAFT_GENERATION.skillDiscount`
+= ×0.65 — spec : "attributs actuels FAIBLES"), (3) retire `hidden.potential`
+avec une variance plus large que la génération standard
+(`DRAFT_GENERATION.potential`, stdDev 24 vs 20) décalée par la qualité de
+cuvée de la saison. Une seule source de vérité pour la génération de base
+(physique/mental/traits), cohérent avec CLAUDE.md.
+→ `engine/generation/draftClass.ts`
+
+### Qualité de cuvée : décalage gaussien borné, tiré une fois par classe
+La spec ne fixe pas de mécanisme précis pour "bonnes/mauvaises années".
+**Décision** : `drawDraftClassQualityOffset` tire un scalaire
+`N(0, DRAFT_GENERATION.classQualityStdDev)` borné à ±`classQualityMax` (±18),
+ajouté à la moyenne de `potential` de toute la promotion — une cuvée "forte"
+produit statistiquement plus de prospects à haut potentiel, sans jamais
+garantir une vraie superstar (toujours soumis à la variance individuelle).
+Vérifié sur `tests/properties`/`draftClass.test.ts` : une cuvée à +15 produit
+une moyenne de potentiel significativement plus haute qu'une cuvée à -15.
+→ `engine/config/tuning.ts` (`DRAFT_GENERATION`), `engine/generation/draftClass.ts`
+
+### Lottery : odds NBA post-2019 reprises telles quelles (format non protégé)
+CLAUDE.md autorise explicitement la reprise de la structure de ligue/formats
+de compétition (non protégés), et le prompt de cadrage demandait "style NBA :
+les 3 pires équipes à égalité de chances pour le pick 1". **Décision** :
+`DRAFT_LOTTERY.pickOneOddsPerThousand` reprend exactement la table NBA
+post-2019 (140/140/140/125/105/90/75/60/45/30/20/15/10/5, somme 1000, 14
+équipes lottery). Tirage simplifié par rapport aux vraies combinaisons NBA
+(4 tirages pondérés successifs avec retrait de l'équipe tirée et redistribution
+des poids restants, plutôt qu'un vrai calcul combinatoire à 4 chiffres) —
+produit qualitativement le même comportement (les 3 pires équipes quasi à
+égalité pour le pick 1, vérifié par test statistique sur 3000 tirages,
+`tests/properties`/`draft.test.ts`) sans reproduire l'algorithme exact de
+tirage de boules NBA, jugé hors scope pour l'objectif de la session.
+→ `engine/config/tuning.ts` (`DRAFT_LOTTERY`), `engine/market/draft.ts` (`computeDraftOrder`)
+
+### Ordre du 2e tour : identique au 1er tour (pas un second tirage de lottery)
+La spec dit "draft 2 tours (60 picks)" sans préciser si le 2e tour a son propre
+ordre. **Décision** : `runDraft` reuse le même `order` (30 équipes) pour les
+deux tours — reflète la pratique NBA usuelle (le 2e tour suit generalement le
+même ordre inversé de classement, sans nouvelle lottery). Pas de gestion de
+picks échangés/protégés (`DraftPick` en tant qu'entité tradable) — hors scope
+avant la Phase 5 (trades complets).
+→ `engine/market/draft.ts` (`runDraft`)
+
+### IA de sélection : "meilleur talent disponible" pur, sans besoins d'équipe ni scouting
+Le plan-développement mentionne "IA de draft des autres équipes (besoins +
+meilleur talent disponible)" mais le découpage de session donné par
+l'utilisateur place explicitement l'IA de draft en Session 3 ("Scouting et IA
+de draft"), aux côtés du système de fourchettes. **Décision** : cette session
+implémente uniquement une sélection triviale — `prospectValue = overall×0.4 +
+potential×0.6`, prise sur les **vraies valeurs** (aucune incertitude de
+scouting n'existe encore) — sans aucune notion de besoin de roster par poste.
+Sera remplacé/enrichi en Session 3 par une IA qui raisonne sur des fourchettes
+scoutées plutôt que sur la vérité, et potentiellement sur les besoins
+d'équipe. Documenté explicitement pour ne pas être confondu avec un oubli.
+→ `engine/market/draft.ts` (`runDraft`, `prospectValue`)
+
+### Non-draftés : pool en mémoire seulement, pas encore de vraie entité "free agent"
+Spec : "les non-draftés deviennent free agents invisibles en P3 (pool pour la
+Phase 4)". **Décision** : `DraftResult.undraftedProspects` est un simple
+tableau de `Player[]` en sortie de `runDraft`, non persisté nulle part dans
+`League` (pas de nouveau champ `League.freeAgents`) — le prompt de cadrage dit
+littéralement "invisibles en P3", donc aucune UI/mécanique ne doit pouvoir les
+voir ou les utiliser cette phase. Ils sont simplement recalculés (perdus)
+chaque saison dans le batch actuel ; la Phase 4 (free agency) leur donnera une
+vraie persistance dans `League` quand ils deviendront exploitables.
+→ `engine/market/draft.ts` (`DraftResult.undraftedProspects`)
+
+### Extension à 17 immédiatement retaillée à 15 (pas de vraie gestion de roster de 17 pendant la saison)
+La spec autorise "une extension temporaire à 17 joueurs" mais précise que "la
+vraie gestion de roster arrive avec les contrats en P4". **Décision** :
+`applyDraftToRosters` ajoute les 2 rookies draftés (roster → 17) puis coupe
+immédiatement les 2 moins bien notés (`playerOverallRating`) pour revenir à
+`LEAGUE_GENERATION.rosterSize` (15) — le reste du moteur (rotations,
+assignation tactique, fatigue) est calibré et testé pour des rosters de 15 ;
+laisser un roster à 17 en permanence changerait silencieusement ces
+calibrations sans le vouloir. Alternative écartée : garder 17 en permanence —
+rejetée, car sans système de contrats/waivers (P4), rien n'empêcherait les
+rosters de grossir indéfiniment (+2 nets par saison sur 20 saisons ⇒ 55
+joueurs/équipe), ce qu'un batch de contrôle aurait immédiatement révélé comme
+absurde. Les joueurs coupés ne sont pas récupérés (perdus, pas de pool de
+waivers en P3) — cohérent avec "pas de vraie gestion de roster avant P4".
+→ `engine/market/draft.ts` (`applyDraftToRosters`)
+
+### Ordre d'intersaison : progression/retraite d'abord, puis draft
+CLAUDE.md décrit la boucle annuelle "Lottery → Draft → Free Agency → ... →
+Saison régulière". **Décision** : dans `batch/run.ts`, `runOffseason`
+(vieillissement/retraites/purge, Session 1) s'exécute avant le calcul de
+l'ordre de lottery et le draft — les rosters sont donc déjà revenus à 15
+(vidés de leurs retraités, complétés par des fillers) au moment où le draft
+les étend à 17 puis les retaille à 15. Alternative (draft avant intersaison)
+écartée : aurait pu drafter un rookie puis le voir immédiatement remplacé par
+un filler générique si son équipe manquait de profondeur à son poste, un
+comportement absurde.
+→ `batch/run.ts`
+
+### Golden master toujours inchangé cette session
+Comme en Session 1 : `generateLeague`/`generatePlayer` (chemin utilisé par
+`tests/golden`) ne sont pas modifiés — seules de nouvelles fonctions
+exportées (`pickFreeJerseyNumber`, `SKILL_KEYS`/`PHYSICAL_KEYS`) s'ajoutent
+sans changer le comportement des fonctions existantes. Le draft/la lottery ne
+s'exécutent que dans la boucle multi-saisons de `batch/run.ts`, jamais dans un
+`simulateSeason` unique. Vérifié : `npm test` reste vert sans régénérer
+`tests/golden/golden-hash.txt`.
+→ `tests/golden/golden-master.ts` (inchangé)
+
+### Tests étendus (mêmes 5 familles)
+- **Famille 1** : `engine/generation/draftClass.test.ts`, `engine/market/draft.test.ts`
+  — taille de classe, fourchette d'âge, discount technique, décalage de
+  cuvée, ordre de lottery (structure + déterminisme), 60 picks/2 tours,
+  extension puis coupe à 15.
+- **Famille 2** : `tests/properties/draft.property.test.ts` — validité de
+  l'ordre de draft (30 équipes uniques, aucune équipe playoffs avant le pick
+  15) sur 100 classements aléatoires ; `draft.test.ts` inclut aussi une
+  vérification statistique sur 3000 tirages de lottery (tolérance large,
+  non-flaky) pour l'égalité de chances des 3 pires équipes.
+- **Famille 3** : `batch/run.ts` affiche désormais un rapport draft par
+  saison (taille de classe, décalage de cuvée, non-draftés, note du pick 1) —
+  validé sur 20 saisons de contrôle (seed `fblm-p3-session2-control`) :
+  aucune anomalie, âge moyen ligue toujours stable (25.7-27.7).
+- **Famille 4** : golden master inchangé, voir décision ci-dessus.
+- **Famille 5** : coût négligeable ajouté (génération de ~65 prospects +
+  tri O(n log n) sur ≤70 éléments par pick) — batch 20 saisons toujours de
+  l'ordre de quelques secondes/saison.
+→ `engine/generation/draftClass.test.ts`, `engine/market/draft.test.ts`,
+`tests/properties/draft.property.test.ts`

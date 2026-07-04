@@ -5,9 +5,14 @@
  * de la spec (spec-possession-algorithm.md §11, spec-tests-phase1.md §3).
  */
 import { generateLeague } from "../engine/generation/league.js";
+import { generateDraftClass, drawDraftClassQualityOffset } from "../engine/generation/draftClass.js";
 import { simulateSeason } from "../engine/season/season.js";
+import { runOffseason } from "../engine/season/offseason.js";
+import { applyDraftToRosters, computeDraftOrder, runDraft } from "../engine/market/draft.js";
 import { createRng } from "../engine/utils/rng.js";
-import { LEAGUE_TARGETS } from "../engine/config/tuning.js";
+import { LEAGUE_TARGETS, PLAYER_GENERATION } from "../engine/config/tuning.js";
+import { addYears } from "../engine/players/age.js";
+import { playerOverallRating } from "../engine/players/development.js";
 import { BatchAccumulator, type SeasonMetrics } from "./metrics.js";
 
 function parseArgs(argv: readonly string[]): { seasons: number; seed: string } {
@@ -106,18 +111,95 @@ function report(metrics: SeasonMetrics, seasons: number, elapsedMs: number): voi
   console.table(rows);
 }
 
+interface DemographicsSample {
+  season: number;
+  averageAge: number;
+  retirements: number;
+  replacementsGenerated: number;
+}
+
+function reportDemographics(samples: readonly DemographicsSample[]): void {
+  if (samples.length === 0) return;
+  const rows = samples.map((s) => ({
+    saison: s.season,
+    "âge moyen ligue": s.averageAge.toFixed(2),
+    cible: `${LEAGUE_TARGETS.leagueAverageAge.min}-${LEAGUE_TARGETS.leagueAverageAge.max}`,
+    ok: inRange(s.averageAge, LEAGUE_TARGETS.leagueAverageAge) ? "OK" : "HORS CIBLE",
+    retraites: s.retirements,
+    remplaçants: s.replacementsGenerated,
+  }));
+  console.log(`\nDémographie de la ligue (plan-développement §Phase 3 — Session 1, intersaison) :\n`);
+  console.table(rows);
+}
+
+interface DraftSample {
+  season: number;
+  classSize: number;
+  classQualityOffset: number;
+  undraftedCount: number;
+  pickOneOverall: number;
+}
+
+function reportDraft(samples: readonly DraftSample[]): void {
+  if (samples.length === 0) return;
+  const rows = samples.map((s) => ({
+    saison: s.season,
+    "taille classe": s.classSize,
+    "décalage cuvée": s.classQualityOffset.toFixed(1),
+    "non draftés": s.undraftedCount,
+    "note pick 1": s.pickOneOverall.toFixed(1),
+  }));
+  console.log(`\nDraft (plan-développement §Phase 3 — Session 2, lottery + 2 tours) :\n`);
+  console.table(rows);
+}
+
 async function main(): Promise<void> {
   const { seasons, seed } = parseArgs(process.argv.slice(2));
   console.log(`Génération de la ligue — seed = "${seed}"`);
   const league = generateLeague(seed);
 
   const accumulator = new BatchAccumulator(league);
+  const demographics: DemographicsSample[] = [];
+  const draftSamples: DraftSample[] = [];
   const t0 = Date.now();
   for (let i = 0; i < seasons; i++) {
     const rng = createRng(`${seed}-season-${i}`);
     // Chaque saison est consommée par l'accumulateur puis peut être GC (pas de
     // rétention du tableau complet — voir docs/decisions.md "Harnais batch en streaming").
-    accumulator.addSeason(simulateSeason(rng, league));
+    const season = simulateSeason(rng, league);
+    accumulator.addSeason(season);
+
+    // Intersaison (plan-développement §Phase 3 — Session 1) : progression/déclin,
+    // retraites, purge — même `league` (et donc même objets `Player`) réutilisée
+    // d'une saison à l'autre dans cette boucle, contrairement au reste du batch
+    // qui ne fait que lire `league` en lecture seule.
+    const referenceDate = addYears(PLAYER_GENERATION.referenceDate, i + 1);
+    const offseasonResult = runOffseason(rng, league, season.minutesByPlayer, referenceDate);
+    demographics.push({
+      season: i + 1,
+      averageAge: offseasonResult.leagueAverageAge,
+      retirements: offseasonResult.retirements,
+      replacementsGenerated: offseasonResult.replacementsGenerated,
+    });
+
+    // Draft lottery + draft (plan-développement §Phase 3 — Session 2), à partir
+    // du classement de la saison qui vient de se terminer — après l'intersaison
+    // (les rosters sont déjà revenus à 15 avant que le draft ne les étende
+    // temporairement à 17, cf. `applyDraftToRosters`).
+    const classQualityOffset = drawDraftClassQualityOffset(rng);
+    const prospects = generateDraftClass(rng, referenceDate, classQualityOffset);
+    const order = computeDraftOrder(rng, season.standings);
+    const draftResult = runDraft(order, prospects);
+    applyDraftToRosters(rng, league, draftResult);
+    const pickOne = draftResult.picks[0];
+    draftSamples.push({
+      season: i + 1,
+      classSize: prospects.length,
+      classQualityOffset,
+      undraftedCount: draftResult.undraftedProspects.length,
+      pickOneOverall: pickOne ? playerOverallRating(pickOne.prospect) : 0,
+    });
+
     process.stdout.write(`\rSaison ${i + 1}/${seasons} simulée...`);
   }
   const elapsedMs = Date.now() - t0;
@@ -125,6 +207,8 @@ async function main(): Promise<void> {
 
   const metrics = accumulator.finalize();
   report(metrics, seasons, elapsedMs);
+  reportDemographics(demographics);
+  reportDraft(draftSamples);
 }
 
 main();
