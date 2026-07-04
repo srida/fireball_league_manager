@@ -5,6 +5,7 @@
  *
  * Les champs `player`/`on`/`assistBy`/`stealBy`/`in`/`out` référencent des Player.id.
  */
+import type { TeamSide } from "./common.js";
 
 export type ShotType = "RIM" | "MID_RANGE" | "THREE";
 
@@ -51,4 +52,5 @@ export type Event =
       clock: number;
     }
   | { t: "SUB"; in: string; out: string; clock: number } // P2
-  | { t: "INJURY"; player: string; severity: InjurySeverity; clock: number }; // P2 — Session 2
+  | { t: "INJURY"; player: string; severity: InjurySeverity; clock: number } // P2 — Session 2
+  | { t: "TIMEOUT"; side: TeamSide; clock: number }; // P2 — Session 4 (mode match live)

@@ -213,6 +213,16 @@ describe("aggregateBoxScore — agrégation du log (spec-tests-phase1 §1)", () 
     expect(box["D"]?.pf).toBe(1);
   });
 
+  it("TIMEOUT n'affecte aucune stat individuelle (plan P2 §Session 4)", () => {
+    const events = [
+      { t: "SHOT" as const, player: "A", shotType: "RIM" as const, result: "MAKE" as const, contest: "OPEN" as const, clock: 700 },
+      { t: "TIMEOUT" as const, side: "HOME" as const, clock: 400 },
+    ];
+    const box = aggregateBoxScore(events, { A: 30 });
+    expect(box["A"]?.points).toBe(2);
+    expect(Object.keys(box)).toEqual(["A"]);
+  });
+
   it("la somme des stats individuelles == stats d'équipe", () => {
     const { home, away } = twoTeams("box-sum-league");
     const rng = createRng("box-sum-sim");

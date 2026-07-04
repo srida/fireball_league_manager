@@ -387,16 +387,12 @@ export const FATIGUE = {
   fitnessWearPerMinute: 0.35,
   /** ⚙ Récupération de fitness avant un match avec repos normal. */
   restRecovery: 22,
-  /** ⚙ Récupération de fitness avant un match enchaîné (back-to-back). */
-  backToBackRecovery: 6,
   /**
-   * ⚙ Probabilité qu'un match donné soit un back-to-back pour une équipe.
-   * Proxy stochastique (décision produit Session 2) : le calendrier actuel
-   * (schedule.ts) ne porte aucune date réelle, donc pas de vraie détection de
-   * jours consécutifs — un vrai calendrier à jours est plus à sa place avec
-   * le mode match live (Session 4). Taux calibré sur un rythme NBA-esque.
+   * ⚙ Récupération de fitness avant un match enchaîné (back-to-back), détecté
+   * depuis la Session 4 à partir de vraies dates de calendrier (`SCHEDULE`,
+   * schedule.ts) plutôt que du proxy stochastique de la Session 2.
    */
-  backToBackRate: 0.16,
+  backToBackRecovery: 6,
 } as const;
 
 /**
@@ -526,6 +522,49 @@ export function pressureModifier(trueComposure: number, traits: readonly Trait[]
 
   return Math.max(PRESSURE.minModifier, Math.min(PRESSURE.maxModifier, mod));
 }
+
+// ---------------------------------------------------------------------------
+// Calendrier à jours réels (P2, plan-développement §Phase 2 — Session 4)
+// ---------------------------------------------------------------------------
+
+/**
+ * ⚙ Calendrier de saison régulière à jours réels (schedule.ts), remplaçant le
+ * proxy stochastique de back-to-back de la Session 2 (`docs/decisions.md`
+ * "Modèle de repos inter-matchs") maintenant que le mode match live a besoin
+ * d'une vraie date par match. `seasonStartDate` est un point de référence fixe
+ * (jamais `Date.now()`, même raison que `PLAYER_GENERATION.referenceDate`) :
+ * seul l'écart en jours entre deux dates ISO est utilisé, jamais la date
+ * calendaire réelle actuelle.
+ */
+export const SCHEDULE = {
+  seasonStartDate: "2026-10-21",
+  /**
+   * ⚙ Pilote indirectement `targetGamesPerDay` dans `assignDates` (schedule.ts) :
+   * plus cette valeur est basse, plus de matchs sont tassés par jour, et plus
+   * le taux de back-to-back qui en émerge est élevé. Calibré (batch de contrôle,
+   * docs/decisions.md) pour ~26 % de matchs en back-to-back par équipe — proche
+   * des ~30 % observés en NBA réelle — sur une saison étalée sur ~160 jours
+   * (21 oct. → fin mars).
+   */
+  seasonLengthDays: 160,
+} as const;
+
+// ---------------------------------------------------------------------------
+// Mode match live (P2, plan-développement §Phase 2 — Session 4)
+// ---------------------------------------------------------------------------
+
+/**
+ * ⚙ Temps-morts appelables par un GM en mode match live (`gameEngine.ts`,
+ * `callTimeout`). Effet volontairement simple (décision produit Session 4) :
+ * une petite récupération de `gameStamina` pour les 5 joueurs sur le terrain
+ * de l'équipe concernée, plus une fenêtre libre pour changer tactiques/
+ * rotations sans attendre la prochaine vérification automatique. Pas d'effet
+ * "adversaire refroidi"/momentum — hors scope (mental/momentum, P3+).
+ */
+export const TIMEOUT = {
+  perTeamPerGame: 7,
+  staminaRecovery: 8,
+} as const;
 
 // ---------------------------------------------------------------------------
 // Hooks prévus par les specs — actifs à partir de P2, renvoient 1 en P1

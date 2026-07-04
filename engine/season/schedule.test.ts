@@ -62,3 +62,55 @@ describe("generateSchedule — calendrier de saison (spec-tests-phase1 §1 Saiso
     expect(fixtures.length).toBe((30 * 82) / 2);
   });
 });
+
+describe("generateSchedule — calendrier à jours réels (plan-développement §Phase 2 — Session 4)", () => {
+  const league = generateLeague("schedule-dates-test-league");
+  const fixtures = generateSchedule(league);
+
+  it("chaque match a une date ISO valide, jamais avant le début de saison", () => {
+    for (const f of fixtures) {
+      expect(f.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(f.date >= "2026-10-21").toBe(true);
+    }
+  });
+
+  it("aucune équipe ne joue deux fois le même jour", () => {
+    const byDate = new Map<string, Set<string>>();
+    for (const f of fixtures) {
+      const teamsToday = byDate.get(f.date) ?? new Set<string>();
+      expect(teamsToday.has(f.homeTeamId)).toBe(false);
+      expect(teamsToday.has(f.awayTeamId)).toBe(false);
+      teamsToday.add(f.homeTeamId);
+      teamsToday.add(f.awayTeamId);
+      byDate.set(f.date, teamsToday);
+    }
+  });
+
+  it("les dates sont non-décroissantes dans l'ordre du calendrier (chronologie cohérente)", () => {
+    for (let i = 1; i < fixtures.length; i++) {
+      expect(fixtures[i]!.date >= fixtures[i - 1]!.date).toBe(true);
+    }
+  });
+
+  it("un taux de back-to-back réaliste émerge du calendrier (ni ~0 %, ni quasi-systématique)", () => {
+    const lastPlayedDate = new Map<string, string>();
+    let backToBackCount = 0;
+    let totalTeamGames = 0;
+    for (const f of fixtures) {
+      for (const teamId of [f.homeTeamId, f.awayTeamId]) {
+        totalTeamGames++;
+        const previous = lastPlayedDate.get(teamId);
+        if (previous) {
+          const diffDays = Math.round(
+            (Date.parse(`${f.date}T00:00:00.000Z`) - Date.parse(`${previous}T00:00:00.000Z`)) / 86_400_000,
+          );
+          if (diffDays === 1) backToBackCount++;
+        }
+        lastPlayedDate.set(teamId, f.date);
+      }
+    }
+    const rate = backToBackCount / totalTeamGames;
+    expect(rate).toBeGreaterThan(0.1);
+    expect(rate).toBeLessThan(0.4);
+  });
+});

@@ -101,7 +101,8 @@ export function aggregateBoxScore(
         break;
       }
       case "SUB":
-        break; // P2
+      case "TIMEOUT":
+        break; // P2 — n'affecte aucune stat individuelle
     }
   }
 

@@ -56,6 +56,11 @@ interface PlayerAvailability {
  * pour les matchs de calendrier ; applique aussi le retour de blessure accéléré
  * du trait Guerrier (`effectiveInjuryGamesOut`, mental.ts).
  */
+function daysBetween(isoA: string, isoB: string): number {
+  const msPerDay = 24 * 60 * 60 * 1000;
+  return Math.round((Date.parse(`${isoB}T00:00:00.000Z`) - Date.parse(`${isoA}T00:00:00.000Z`)) / msPerDay);
+}
+
 function playRealGame(rng: RNG, teamById: Map<string, Team>) {
   const playerById = new Map<string, Player>();
   for (const team of teamById.values()) {
@@ -73,15 +78,31 @@ function playRealGame(rng: RNG, teamById: Map<string, Team>) {
   };
 
   /**
-   * Prépare le roster disponible d'une équipe avant un match : récupération de
-   * fitness selon le repos (proxy stochastique back-to-back, docs/decisions.md
-   * "Modèle de repos inter-matchs"), décompte des blessures en cours, exclusion
-   * des joueurs toujours indisponibles.
+   * Dernière date de calendrier (plan P2 §Session 4) à laquelle chaque équipe
+   * a joué — permet une vraie détection de back-to-back (jour consécutif),
+   * remplaçant le proxy stochastique de la Session 2. Absent pour le play-in/
+   * playoffs (pas de date de calendrier fournie) : une vraie planification de
+   * playoffs ne produit jamais de back-to-back (toujours ≥ 1 jour de repos
+   * entre deux matchs d'une série), donc `isBackToBack` y reste toujours faux.
    */
-  function prepareRoster(team: Team, isBackToBack: boolean): { roster: Player[]; startingFitness: Record<string, number> } {
+  const lastPlayedDate = new Map<string, string>();
+
+  function isBackToBack(teamId: string, gameDate: string | undefined): boolean {
+    if (!gameDate) return false;
+    const previous = lastPlayedDate.get(teamId);
+    return previous !== undefined && daysBetween(previous, gameDate) === 1;
+  }
+
+  /**
+   * Prépare le roster disponible d'une équipe avant un match : récupération de
+   * fitness selon le repos (back-to-back détecté depuis le calendrier réel,
+   * docs/decisions.md "Modèle de repos inter-matchs"), décompte des blessures
+   * en cours, exclusion des joueurs toujours indisponibles.
+   */
+  function prepareRoster(team: Team, backToBack: boolean): { roster: Player[]; startingFitness: Record<string, number> } {
     const roster: Player[] = [];
     const startingFitness: Record<string, number> = {};
-    const recovery = isBackToBack ? FATIGUE.backToBackRecovery : FATIGUE.restRecovery;
+    const recovery = backToBack ? FATIGUE.backToBackRecovery : FATIGUE.restRecovery;
 
     for (const player of team.roster) {
       const a = getAvailability(player.id);
@@ -95,12 +116,17 @@ function playRealGame(rng: RNG, teamById: Map<string, Team>) {
     return { roster, startingFitness };
   }
 
-  return (homeTeamId: string, awayTeamId: string, context: GameContextInfo = REGULAR_SEASON_CONTEXT): RealGameResult => {
+  return (
+    homeTeamId: string,
+    awayTeamId: string,
+    context: GameContextInfo = REGULAR_SEASON_CONTEXT,
+    gameDate?: string,
+  ): RealGameResult => {
     const home = teamById.get(homeTeamId) as Team;
     const away = teamById.get(awayTeamId) as Team;
 
-    const homePrep = prepareRoster(home, rng.bool(FATIGUE.backToBackRate));
-    const awayPrep = prepareRoster(away, rng.bool(FATIGUE.backToBackRate));
+    const homePrep = prepareRoster(home, isBackToBack(homeTeamId, gameDate));
+    const awayPrep = prepareRoster(away, isBackToBack(awayTeamId, gameDate));
 
     const { game, minutesPlayed, injuries } = simulateGame(rng, {
       gameId: `${homeTeamId}-vs-${awayTeamId}-${rng.int(0, 1_000_000_000)}`,
@@ -114,6 +140,11 @@ function playRealGame(rng: RNG, teamById: Map<string, Team>) {
       awayStartingFitness: awayPrep.startingFitness,
       context,
     });
+
+    if (gameDate) {
+      lastPlayedDate.set(homeTeamId, gameDate);
+      lastPlayedDate.set(awayTeamId, gameDate);
+    }
 
     for (const [playerId, minutes] of Object.entries(minutesPlayed)) {
       const a = getAvailability(playerId);
@@ -140,7 +171,7 @@ export function simulateSeason(rng: RNG, league: League): SeasonResult {
   const playGame = playRealGame(rng, teamById);
 
   const regularSeasonGames: Game[] = fixtures.map((f, i) => {
-    const result = playGame(f.homeTeamId, f.awayTeamId);
+    const result = playGame(f.homeTeamId, f.awayTeamId, REGULAR_SEASON_CONTEXT, f.date);
     return {
       id: `game-${i}`,
       homeTeamId: f.homeTeamId,

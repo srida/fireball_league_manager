@@ -11,6 +11,7 @@
     "batch": "tsx batch/run.ts",
     "calibrate": "tsx batch/calibrate.ts",
     "smoke": "tsx batch/smoke.ts",
+    "live-demo": "tsx batch/live-demo.ts",
     "golden:update": "tsx tests/golden/update-golden.ts",
     "validate:p1": "vitest run && tsx batch/run.ts --seasons=50"
   },

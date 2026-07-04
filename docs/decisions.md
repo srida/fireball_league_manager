@@ -363,3 +363,92 @@ de performance) déplace le flux de tirages aléatoires en aval même pour les
 joueurs neutres, ce qui explique la sensibilité à la seed sans indiquer de
 biais systématique — `PRESSURE`/`MENTAL` restent aux valeurs initiales.
 → `engine/config/tuning.ts` (`PRESSURE`, `MENTAL`)
+
+## Phase 2 — Mode match live (Session 4)
+
+### API du mode live : objet de session explicite plutôt qu'un générateur
+Décision produit validée : `LiveGameSession` (liveGame.ts) enveloppe un
+`GameEngine` (gameEngine.ts) et expose `.step()` (avance une possession, renvoie
+un instantané sérialisable), plus des méthodes d'intervention
+(`.callTimeout()`, `.substitute()`, `.setTactics()`) appelables entre deux
+`.step()`. Alternative écartée : une fonction génératrice (`function*`) —
+idiomatique mais plus délicate à sérialiser/persister à travers une future
+frontière UI ou client-serveur (techno UI non choisie, CLAUDE.md).
+→ `engine/simulation/liveGame.ts`
+
+### Extraction de `GameEngine` : mécanique, pour préserver le hash golden master
+`game.ts` (Sessions 1-3) contenait toute la boucle de match en un seul bloc.
+Extraite telle quelle dans `gameEngine.ts` (`createGameEngine`), qui expose
+`stepPossession()`/`finalize()` — `simulateGame` (game.ts) n'est plus qu'une
+boucle `while (!engine.stepPossession()) {}` autour de ce moteur partagé avec
+le mode live. Extraction strictement mécanique (aucun nouvel appel RNG, même
+ordre d'exécution) : un test de propriété (`tests/properties/liveGame.property.test.ts`,
+60 seeds) vérifie que `LiveGameSession` sans intervention produit un log
+strictement identique à `simulateGame` — le hash golden master n'a donc changé
+qu'à cause du calendrier à jours réels (entrée suivante), pas de ce refactor.
+→ `engine/simulation/gameEngine.ts`, `engine/simulation/game.ts`
+
+### Calendrier à jours réels : remplace le proxy stochastique de back-to-back de la Session 2
+Décision produit validée (question de clarification). `schedule.ts` assigne
+maintenant une vraie date ISO à chaque match (`assignDates`, algorithme
+glouton : un quota de matchs/jour dérivé de `SCHEDULE.seasonLengthDays` limite
+le nombre de matchs programmés par soir — sans ce plafond, l'algorithme
+programme jusqu'à 15 matchs/soir, épuisant toutes les équipes reposées en un
+jour et forçant un back-to-back systématique le lendemain ; deux passes par
+jour préfèrent les équipes reposées, une seconde passe n'autorise un
+back-to-back que pour compléter le quota si le pool reposé est insuffisant).
+`season.ts` détecte maintenant un vrai back-to-back (jour consécutif) au lieu
+du tirage `rng.bool(FATIGUE.backToBackRate)` de la Session 2. Le play-in et
+les playoffs ne reçoivent volontairement pas de date (`gameDate` absent) : une
+vraie planification de séries n'a jamais de back-to-back (repos ≥ 1 jour entre
+deux matchs), donc `isBackToBack` y reste toujours faux plutôt que de
+construire un calendrier de playoffs synthétique hors scope.
+→ `engine/season/schedule.ts` (`assignDates`), `engine/season/season.ts` (`playRealGame`), `engine/config/tuning.ts` (`SCHEDULE`)
+
+### Calibration du calendrier : taux de back-to-back émergent (~26 %), pas forcé à 16 %
+`SCHEDULE.seasonLengthDays` pilote indirectement le nombre de matchs/jour
+programmés, donc le taux de back-to-back qui en émerge — relation non linéaire
+et par paliers entiers (le nombre de matchs/jour est arrondi), pas un curseur
+continu. Essais : 174 jours → 5 % de back-to-back, 160 jours → 25.9 %, 140
+jours → 50 %. Retenu **160 jours** (25.9 %, calendrier du 21 oct. à fin mars) :
+plus proche de la réalité NBA récente (~24-30 % de matchs en back-to-back par
+équipe et par saison) que le proxy arbitraire de la Session 2 (16 %) ou que le
+palier plus bas (5 %, trop peu réaliste). Batch de contrôle (10 saisons, seed
+`fblm-session2-control`) : aucune régression malgré le taux de back-to-back
+plus élevé qu'avant — victoires à domicile même légèrement rentrée dans la
+cible (55.2 % contre 54.3 % hors cible en Session 3), tous les autres écarts
+déjà documentés inchangés en ampleur (3P%, meilleur scoreur, corrélation
+talent→wins).
+→ `engine/config/tuning.ts` (`SCHEDULE.seasonLengthDays`)
+
+### Temps-mort : effet volontairement simple, pas de mécanique momentum/adversaire
+Décision produit validée : `callTimeout` (gameEngine.ts) ne fait que restaurer
+un peu de `gameStamina` aux 5 joueurs sur le terrain et consommer un des
+`TIMEOUT.perTeamPerGame` temps-morts disponibles — la fenêtre d'intervention
+libre (substitution/tactique) est déjà permise à tout moment via les autres
+méthodes de `GameEngine`, le temps-mort n'a donc pas besoin de la "débloquer"
+mécaniquement. Pas d'effet "adversaire refroidi"/momentum : hors scope
+(mental/momentum plus poussé, P3+), écarté explicitement lors du cadrage de
+session.
+→ `engine/config/tuning.ts` (`TIMEOUT`), `engine/simulation/gameEngine.ts` (`callTimeout`)
+
+### Substitution manuelle : bypass du moteur automatique, pas d'intégration à la hiérarchie de rotation
+`substitute()` (gameEngine.ts) échange directement deux `OnCourtPlayer` et émet
+un événement `SUB`, sans mettre à jour `RotationPlan`/`targetMinutes` — une
+substitution manuelle du GM est une dérogation ponctuelle au plan automatique
+de la Session 1, pas un nouveau plan permanent. Le moteur de rotation
+automatique (`decideSubstitutions`) continue de fonctionner normalement après
+coup, en lisant l'état `onCourt` à jour.
+→ `engine/simulation/gameEngine.ts` (`substitute`)
+
+### Démo CLI scriptée plutôt qu'une UI interactive
+Décision produit validée : `batch/live-demo.ts` avance un match via
+`LiveGameSession`, imprime un flux texte (score, tirs, pertes de balle,
+blessures, changements, temps-morts) et applique une séquence scriptée
+d'interventions (temps-mort en Q2, substitution manuelle en Q3, changement
+tactique en Q4) — reste un outil de validation batch (CLAUDE.md : "le harnais
+batch est un produit"), pas un produit UI ; la technologie d'UI n'est pas
+encore choisie (CLAUDE.md : "UI décidée plus tard, découplée du moteur").
+REBOUND et FREE_THROW individuels ne sont volontairement pas rendus ligne par
+ligne (bruit élevé pour un flux minimal) — ils restent dans le log/box score.
+→ `batch/live-demo.ts`

@@ -16,11 +16,14 @@
  * - 2 matchs contre chacune des 15 équipes de l'autre conférence (30) — 1 dom/1 ext.
  * Total : 16 + 36 + 30 = 82. Home/away : 8+12+6+15 = 41 de chaque côté (vérifié par test).
  */
+import { SCHEDULE } from "../config/tuning.js";
 import type { League, Team } from "../types/index.js";
 
 export interface Fixture {
   homeTeamId: string;
   awayTeamId: string;
+  /** Date ISO du match (plan P2 §Session 4 — calendrier à jours réels). */
+  date: string;
 }
 
 function groupByDivision(teams: readonly Team[]): Map<string, Team[]> {
@@ -33,14 +36,83 @@ function groupByDivision(teams: readonly Team[]): Map<string, Team[]> {
   return map;
 }
 
-function addGames(fixtures: Fixture[], home: Team, away: Team, homeGames: number, awayGames: number): void {
+interface UnscheduledFixture {
+  homeTeamId: string;
+  awayTeamId: string;
+}
+
+function addGames(fixtures: UnscheduledFixture[], home: Team, away: Team, homeGames: number, awayGames: number): void {
   for (let i = 0; i < homeGames; i++) fixtures.push({ homeTeamId: home.id, awayTeamId: away.id });
   for (let i = 0; i < awayGames; i++) fixtures.push({ homeTeamId: away.id, awayTeamId: home.id });
 }
 
+function addDays(isoDate: string, days: number): string {
+  const date = new Date(`${isoDate}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+/**
+ * Assigne une date de calendrier réelle à chaque match (plan P2 §Session 4),
+ * pour permettre une vraie détection de back-to-back (au lieu du proxy
+ * stochastique de la Session 2, `docs/decisions.md`). Algorithme glouton :
+ * un nombre de matchs par jour est plafonné à `targetGamesPerDay` (dérivé de
+ * `SCHEDULE.seasonLengthDays`, très inférieur au maximum physique de 15 —
+ * sans ce plafond, l'algorithme programme jusqu'à 15 matchs/soir et épuise
+ * les équipes reposées en un jour, forçant un back-to-back systématique le
+ * lendemain). Deux passes par jour : d'abord les matchs dont aucune des deux
+ * équipes n'a joué la veille (repos normal, majorité des cas réels) ; une
+ * seconde passe n'autorise un back-to-back que pour compléter le quota du
+ * jour si le pool reposé ne suffit pas. Ordre de construction préservé
+ * (déterministe, pas de RNG : la seed de ligue pilote déjà toute la génération
+ * en amont).
+ */
+function assignDates(fixtures: readonly UnscheduledFixture[]): Fixture[] {
+  const remaining = [...fixtures];
+  const scheduled: Fixture[] = [];
+  const lastPlayedDay = new Map<string, number>();
+  const targetGamesPerDay = Math.max(1, Math.round(fixtures.length / SCHEDULE.seasonLengthDays));
+  let day = 0;
+
+  while (remaining.length > 0) {
+    const playedToday = new Set<string>();
+    const date = addDays(SCHEDULE.seasonStartDate, day);
+    let placedToday = 0;
+
+    const placeEligible = (allowBackToBack: boolean): void => {
+      for (let i = 0; i < remaining.length && placedToday < targetGamesPerDay; ) {
+        const fixture = remaining[i] as UnscheduledFixture;
+        if (playedToday.has(fixture.homeTeamId) || playedToday.has(fixture.awayTeamId)) {
+          i++;
+          continue;
+        }
+        const restedHome = lastPlayedDay.get(fixture.homeTeamId) !== day - 1;
+        const restedAway = lastPlayedDay.get(fixture.awayTeamId) !== day - 1;
+        if (!allowBackToBack && (!restedHome || !restedAway)) {
+          i++;
+          continue;
+        }
+        remaining.splice(i, 1);
+        playedToday.add(fixture.homeTeamId);
+        playedToday.add(fixture.awayTeamId);
+        lastPlayedDay.set(fixture.homeTeamId, day);
+        lastPlayedDay.set(fixture.awayTeamId, day);
+        scheduled.push({ ...fixture, date });
+        placedToday++;
+      }
+    };
+
+    placeEligible(false);
+    if (placedToday < targetGamesPerDay) placeEligible(true);
+    day++;
+  }
+
+  return scheduled;
+}
+
 /** Génère le calendrier complet de la saison régulière (82 matchs/équipe). */
 export function generateSchedule(league: League): Fixture[] {
-  const fixtures: Fixture[] = [];
+  const fixtures: UnscheduledFixture[] = [];
   const divisionsByConference = new Map<string, string[]>();
   for (const division of league.divisions) {
     const list = divisionsByConference.get(division.conference) ?? [];
@@ -102,5 +174,5 @@ export function generateSchedule(league: League): Fixture[] {
     }
   }
 
-  return fixtures;
+  return assignDates(fixtures);
 }
