@@ -1,7 +1,8 @@
 import type { RNG } from "../utils/rng.js";
-import { ARCHETYPE_POSITIONS, LEAGUE_GENERATION, PLAYER_GENERATION } from "../config/tuning.js";
+import { ARCHETYPE_POSITIONS, LEAGUE_GENERATION, PLAYER_GENERATION, SUMMER_LEAGUE } from "../config/tuning.js";
 import { POSITIONS, type ArchetypeId, type Player, type Position } from "../types/index.js";
 import { generatePlayer } from "./player.js";
+import { deriveAge } from "../players/age.js";
 
 export function archetypesForPosition(position: Position): ArchetypeId[] {
   return (Object.keys(ARCHETYPE_POSITIONS) as ArchetypeId[]).filter((archetype) =>
@@ -48,7 +49,15 @@ export function generateRoster(rng: RNG): Player[] {
     const candidates = archetypesForPosition(position);
     for (let i = 0; i < LEAGUE_GENERATION.playersPerPositionOnRoster; i++) {
       const archetypeId = rng.pick(candidates);
-      players.push(generatePlayer(rng, archetypeId, position));
+      const player = generatePlayer(rng, archetypeId, position);
+      // Bootstrap `seasonsInLeague` (P3 §Session 4) : une ligue générée "en cours de
+      // route" n'est pas peuplée uniquement de rookies. Dérivé de l'âge, pas d'un
+      // tirage RNG supplémentaire — préserve la séquence de tirages (golden master).
+      player.state.seasonsInLeague = Math.min(
+        SUMMER_LEAGUE.initialTenureMax,
+        Math.max(0, deriveAge(player.birthDate) - SUMMER_LEAGUE.initialTenureAgeBaseline),
+      );
+      players.push(player);
     }
   }
   assignJerseyNumbers(rng, players);

@@ -61,6 +61,24 @@ describe("runOffseason (plan-développement §Phase 3 — Session 1)", () => {
     }
   });
 
+  it("seasonsInLeague est incrémenté de 1 pour chaque survivant (plan P3 §Session 4 : éligibilité Summer League)", () => {
+    const league = generateLeague("offseason-tenure-league");
+    const rng = createRng("offseason-tenure-run");
+    const referenceDate = addYears(PLAYER_GENERATION.referenceDate, 1);
+
+    const before = new Map(league.teams.flatMap((t) => t.roster).map((p) => [p.id, p.state.seasonsInLeague]));
+    runOffseason(rng, league, {}, referenceDate);
+
+    for (const team of league.teams) {
+      for (const player of team.roster) {
+        const previous = before.get(player.id);
+        // Un survivant a vu son compteur +1 ; un remplaçant (nouveau, absent de `before`) démarre à 0.
+        if (previous !== undefined) expect(player.state.seasonsInLeague).toBe(previous + 1);
+        else expect(player.state.seasonsInLeague).toBe(0);
+      }
+    }
+  });
+
   it("l'âge moyen de la ligue avance d'environ un an par intersaison quand personne ne part à la retraite", () => {
     // Ligue jeune (peu de retraites attendues sur une seule intersaison) pour isoler l'effet du vieillissement.
     const league = generateLeague("offseason-age-drift");

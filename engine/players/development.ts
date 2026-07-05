@@ -9,7 +9,7 @@
  * progression global"), pas une valeur par attribut : chaque attribut (technique
  * ou physique) progresse vers ce même plafond, jamais au-delà.
  */
-import { DEVELOPMENT } from "../config/tuning.js";
+import { DEVELOPMENT, SUMMER_LEAGUE } from "../config/tuning.js";
 import { PHYSICAL_KEYS, SKILL_KEYS } from "../generation/player.js";
 import type { RNG } from "../utils/rng.js";
 import type { Player } from "../types/index.js";
@@ -114,6 +114,21 @@ export function applyAnnualDevelopment(player: Player, age: number, minutesShare
       age < physPeak
         ? growAttribute(current, ceiling, ageProgressFactor(age, physPeak), workEthic, coachability, minutesShare, 0)
         : declineAttribute(current, age, physPeak, declineRate, workEthic, DEVELOPMENT.decline.physicalBaseAnnualLoss);
+  }
+}
+
+/**
+ * Micro-boost de progression Summer League (plan-développement §Phase 3 —
+ * Session 4) : un bonus flat sur les skills techniques, en plus de la
+ * progression normale d'intersaison — jamais au-delà de `potential` (même
+ * garde-fou `effectiveCeiling` que `growAttribute`).
+ */
+export function applySummerLeagueBoost(player: Player): void {
+  const ceiling = player.hidden.potential;
+  for (const key of SKILL_KEYS) {
+    const current = player.skills[key];
+    const effectiveCeiling = Math.max(ceiling, current);
+    player.skills[key] = clamp(current + SUMMER_LEAGUE.progressionBonus, 0, Math.min(99, effectiveCeiling));
   }
 }
 

@@ -46,7 +46,7 @@ export default function NewGame({ onStart }: { onStart: (franchise: Franchise) =
   function handleStart(): void {
     if (!selectedTeam) return;
     const runner = createSeasonRunner(createRng(`${previewSeed}:season`), league);
-    onStart({ league, userTeamId: selectedTeam.id, runner });
+    onStart({ league, userTeamId: selectedTeam.id, runner, seasonIndex: 0 });
   }
 
   return (

@@ -32,6 +32,10 @@ export interface Team {
   roster: Player[]; // 15 joueurs en P1
   /** Profil tactique (P2). Assigné à la génération de la ligue selon la composition du roster. */
   tactics: TeamTactics;
+  /** Curseur de budget scouting (0-1, P3 §Session 3) — trait d'identité de franchise, assigné à la génération. */
+  scoutingQuality: number;
+  /** Biais d'évaluation systématique de l'équipe (points d'overall apparent, peut être négatif) — "certaines équipes scoutent mal". */
+  scoutingBias: number;
 }
 
 export interface Division {

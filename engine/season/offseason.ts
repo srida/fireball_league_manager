@@ -22,12 +22,24 @@ import { applyAnnualDevelopment, rollRetirement } from "../players/development.j
 import type { RNG } from "../utils/rng.js";
 import { POSITIONS, type League, type Player } from "../types/index.js";
 
+export interface RetiredPlayerRecord {
+  player: Player;
+  teamId: string;
+  age: number;
+}
+
 export interface OffseasonResult {
   /** Date de référence (ISO) utilisée pour dériver l'âge de chaque joueur cette intersaison. */
   referenceDate: string;
   retirements: number;
   replacementsGenerated: number;
   leagueAverageAge: number;
+  /**
+   * Joueurs retraités cette intersaison, avant purge du roster (P3 §Session 4 :
+   * "récapitulatif d'intersaison — retraites marquantes"). L'appelant filtre/trie
+   * lui-même (ex. par `playerOverallRating` pour ne montrer que les "marquantes").
+   */
+  retiredPlayers: RetiredPlayerRecord[];
 }
 
 /**
@@ -47,6 +59,7 @@ export function runOffseason(
   let retirements = 0;
   let replacementsGenerated = 0;
   const ages: number[] = [];
+  const retiredPlayers: RetiredPlayerRecord[] = [];
 
   for (const team of league.teams) {
     const survivors: Player[] = [];
@@ -58,8 +71,11 @@ export function runOffseason(
 
       if (rollRetirement(rng, player, age)) {
         retirements++;
+        retiredPlayers.push({ player, teamId: team.id, age });
         continue;
       }
+      // Une saison de plus dans la ligue (P3 §Session 4 : éligibilité Summer League).
+      player.state.seasonsInLeague += 1;
       ages.push(age);
       survivors.push(player);
     }
@@ -84,5 +100,5 @@ export function runOffseason(
   }
 
   const leagueAverageAge = ages.reduce((a, b) => a + b, 0) / ages.length;
-  return { referenceDate, retirements, replacementsGenerated, leagueAverageAge };
+  return { referenceDate, retirements, replacementsGenerated, leagueAverageAge, retiredPlayers };
 }

@@ -89,7 +89,7 @@ function makePlayer(overrides: {
       peakAge,
       declineRate,
     },
-    state: { morale: 70, fitness: 100, gameStamina: 100, injury: { type: null, remainingGames: 0 }, form: 0 },
+    state: { morale: 70, fitness: 100, gameStamina: 100, injury: { type: null, remainingGames: 0 }, form: 0, seasonsInLeague: 0 },
     generation: { archetypeId: "TWO_WAY_WING", offArchetype: false },
   };
 }

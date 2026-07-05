@@ -14,9 +14,11 @@ function formatDate(iso: string): string {
 export default function Hub({
   franchise,
   onPlayNextGame,
+  onStartIntersaison,
 }: {
   franchise: Franchise;
   onPlayNextGame: (upcoming: UpcomingGame) => void;
+  onStartIntersaison: () => void;
 }) {
   const { Button, Standings, InjuryBadge, Badge } = getDs();
   const { runner, league, userTeamId } = franchise;
@@ -101,7 +103,12 @@ export default function Hub({
               <Button onClick={() => onPlayNextGame(upcoming)}>Jouer le match</Button>
             </>
           ) : (
-            <div style={{ color: "var(--fbl-text-secondary)" }}>Fin de la saison régulière.</div>
+            <>
+              <div style={{ color: "var(--fbl-text-secondary)" }}>
+                Fin de la saison régulière. Retraites, draft et Summer League vous attendent.
+              </div>
+              <Button onClick={onStartIntersaison}>Lancer l'intersaison</Button>
+            </>
           )}
         </div>
       </div>

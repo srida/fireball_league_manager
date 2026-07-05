@@ -203,6 +203,9 @@ export function generatePlayer(rng: RNG, archetypeId: ArchetypeId, position: Pos
       gameStamina: 100,
       injury: { type: null, remainingGames: 0 },
       form: 0,
+      // Bootstrap générique (0) — `generateRoster` (ligue initiale) et `draftClass.ts`/
+      // `offseason.ts` (rookies) réécrivent cette valeur selon leur contexte.
+      seasonsInLeague: 0,
     },
     generation: { archetypeId, offArchetype },
   };

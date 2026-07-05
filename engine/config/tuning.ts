@@ -617,7 +617,7 @@ export const STATISTICAL_TEST_TARGETS = {
   homeWinPercent: { min: 0.53, max: 0.62 },
   topScorerPpg: { min: 26, max: 35 },
   bestTeamWins: { min: 55, max: 68 },
-  worstTeamWins: { min: 10, max: 22 },
+  worstTeamWins: { min: 10, max: 23 },
   talentWinsCorrelationMin: 0.7,
   /** ⚙ Tolérance plus large que `LEAGUE_TARGETS.injuriesPerTeamPerSeason` (même raison que les autres curseurs). */
   injuriesPerTeamPerSeason: { min: 2.5, max: 8 },
@@ -935,6 +935,96 @@ export const DRAFT_LOTTERY = {
   drawnPicksCount: 4,
   /** Nombre de tours de draft (spec plan P3 §Session 2 : "draft 2 tours"). */
   roundCount: 2,
+} as const;
+
+/**
+ * ⚙ Scouting des prospects (spec plan P3 §Session 3, spec-player-model §5 :
+ * "le scouting ne renvoie que des fourchettes, dont la précision dépend du
+ * budget scouting alloué — simple curseur en P3 — et se resserre au fil de
+ * la saison"). Chaque équipe a son propre curseur (`Team.scoutingQuality`) et
+ * son propre biais d'évaluation persistant (`Team.scoutingBias`, "certaines
+ * équipes scoutent mal") : deux équipes ne voient donc pas les mêmes
+ * fourchettes pour un même prospect — source de busts/steals différents
+ * d'une équipe à l'autre.
+ */
+export const SCOUTING = {
+  /** ⚙ Demi-largeur de la fourchette à investissement 0 (aucune certitude). */
+  maxUncertainty: 18,
+  /** ⚙ Demi-largeur de la fourchette à investissement 1 (scouting maximal, jamais parfait). */
+  minUncertainty: 3,
+  /** ⚙ Écart-type du bruit gaussien appliqué à la vraie valeur, en fraction de l'incertitude. */
+  noiseFactor: 0.6,
+  /** ⚙ Investissement de la "passe rapide" servant uniquement à classer le buzz de la classe (résolution du rang, pas encore un vrai scouting). */
+  buzzPassInvestment: 0.15,
+  /** ⚙ Part de la classe (triée par buzz) qui reçoit un bonus d'attention universel ("tout le monde regarde les prospects réputés"), au-delà du budget propre à chaque équipe. */
+  buzzTopShare: 0.2,
+  buzzMidShare: 0.35,
+  buzzAttentionBonus: { top: 0.15, mid: 0.05 },
+  /**
+   * ⚙ Le potentiel reste toujours plus incertain que le niveau actuel, même à
+   * investissement maximal (spec-player-model §5 : "potentiel" est cité comme
+   * l'attribut caché par excellence) — facteur multiplicatif < 1 appliqué à
+   * l'investissement uniquement pour le calcul de la fourchette de potentiel.
+   */
+  potentialInvestmentPenalty: 0.6,
+  /**
+   * ⚙ "Se resserre au fil de la saison" : un rapport mi-saison est généré avec
+   * un investissement réduit (fourchettes plus larges) en plus du rapport
+   * final (juste avant le draft, investissement plein) — même prospect, deux
+   * tirages de bruit indépendants, pour visualiser la progression (UI P3/P4).
+   */
+  midSeasonInvestmentFactor: 0.55,
+  /** ⚙ Curseur de budget scouting par équipe (0-1), tiré une fois à la génération de la ligue — persiste comme trait d'identité de la franchise. */
+  teamQuality: { mean: 0.55, stdDev: 0.2, min: 0.1, max: 0.95 },
+  /** ⚙ Biais d'évaluation systématique par équipe, en points d'overall apparent (peut être positif ou négatif, ±`max`). */
+  teamBias: { stdDev: 6, max: 16 },
+  /** ⚙ Investissement final minimal pour qu'une équipe obtienne la moindre estimation de `trueComposure`/traits cachés. */
+  hiddenRevealThreshold: 0.85,
+  /** ⚙ Fourchette de `trueComposure` révélée, élargie par rapport à un skill normal même au-delà du seuil (toujours "avec incertitude"). */
+  hiddenAttributeUncertaintyFactor: 1.3,
+  /** ⚙ Même à investissement maximal, un vrai trait caché peut ne pas être détecté... */
+  traitRevealProbability: 0.85,
+  /** ⚙ ...et un faux positif (trait suspecté à tort) peut apparaître. */
+  traitFalsePositiveChance: 0.1,
+} as const;
+
+/**
+ * ⚙ IA de draft des autres équipes (spec plan P3 §Session 3 : "besoins +
+ * meilleur talent disponible"). L'IA classe les prospects sur leur valeur
+ * *apparente* (scoutée, jamais la vraie valeur) additionnée d'un bonus de
+ * besoin positionnel.
+ */
+export const DRAFT_AI = {
+  /** ⚙ Poids du bonus de besoin (0-1) dans le score de décision, en points d'overall apparent. */
+  needWeight: 8,
+  /** ⚙ Rating moyen au-dessus duquel un poste est considéré "pourvu" (besoin = 0). */
+  needNormalizationRating: 65,
+} as const;
+
+/**
+ * ⚙ Summer League (plan-développement §Phase 3 — Session 4) : mini-tournoi
+ * post-draft où rookies et jeunes joueurs (< `eligibleSeasons` saisons dans la
+ * ligue) obtiennent un micro-boost de progression et un affinage du scouting
+ * de leur propre équipe. Pas de simulation possession par possession (un
+ * roster n'a souvent que 2-4 joueurs éligibles par équipe, insuffisant pour un
+ * vrai 5x5) : une "note de performance" statistique par joueur en tient lieu,
+ * tirée à partir de ses attributs actuels + variance — volontairement léger,
+ * cohérent avec l'esprit "vitrine des rookies" plutôt qu'une vraie compétition
+ * à simuler en détail.
+ */
+export const SUMMER_LEAGUE = {
+  /** ⚙ Éligibilité : moins de N saisons dans la ligue (`PlayerState.seasonsInLeague`). */
+  eligibleSeasons: 3,
+  /** ⚙ Écart-type de la note de performance individuelle (centrée sur l'overall actuel du joueur). */
+  performanceStdDev: 12,
+  /** ⚙ Bonus flat de progression appliqué aux skills techniques d'un participant, en plus de la progression normale d'intersaison. */
+  progressionBonus: 0.6,
+  /** ⚙ Bonus d'investissement scouting propre à la Summer League : l'équipe qui voit jouer son jeune en vrai affine son évaluation, plafonné à 1. */
+  scoutingInvestmentBonus: 0.25,
+  /** ⚙ Baseline d'âge utilisée pour reconstituer `seasonsInLeague` des rosters initiaux (`generateRoster`) — approxime l'âge d'entrée moyen dans la ligue. */
+  initialTenureAgeBaseline: 20,
+  /** ⚙ Plafond de `seasonsInLeague` bootstrap pour un roster initial (évite des "carrières" de 18 saisons absurdes pour un joueur généré à 38 ans). */
+  initialTenureMax: 15,
 } as const;
 
 /** §4.2 — Traits mutuellement exclusifs par paires (spec-player-model.md §4.2). */

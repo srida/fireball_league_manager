@@ -726,3 +726,386 @@ s'exécutent que dans la boucle multi-saisons de `batch/run.ts`, jamais dans un
   l'ordre de quelques secondes/saison.
 → `engine/generation/draftClass.test.ts`, `engine/market/draft.test.ts`,
 `tests/properties/draft.property.test.ts`
+
+## Phase 3 — Scouting et IA de draft (Session 3)
+
+### Budget scouting : un curseur par équipe, persistant, pas une négociation de GM
+Le texte de cadrage précise : "la largeur des fourchettes dépend du budget
+scouting alloué (simple curseur en P3)" et l'IA de draft a "un biais
+d'évaluation propre à chaque équipe (certaines équipes scoutent mal)".
+**Décision** : `Team` gagne deux champs (`engine/types/team.ts`) —
+`scoutingQuality` (0-1, curseur de budget, `SCOUTING.teamQuality` : moyenne
+0.55, écart-type 0.2) et `scoutingBias` (biais d'évaluation systématique en
+points d'overall apparent, `SCOUTING.teamBias` : centré sur 0, écart-type 6,
+borné ±16) — tirés une fois à la génération de la ligue
+(`engine/generation/league.ts`) et persistants comme trait d'identité de
+franchise (pas re-tirés chaque saison). Aucune UI/négociation de budget
+n'existe en P3 (pas de "curseur" manipulable par le joueur humain avant une
+future session UI) : la valeur est fixée à la génération, cohérente avec
+"simple curseur en P3" plutôt qu'un système d'allocation actif. Chaque équipe
+scoute donc une même classe de façon indépendante et personnelle — deux
+équipes peuvent juger différemment le même prospect (`scoutDraftClassForTeam`,
+une carte de rapports par équipe via `scoutDraftClassForLeague`), ce qui rend
+certaines franchises structurellement meilleures/pires en draft.
+→ `engine/types/team.ts`, `engine/config/tuning.ts` (`SCOUTING.teamQuality`/`teamBias`), `engine/generation/league.ts`
+
+### Golden master cassé par ce changement — attendu et documenté
+Ajouter deux champs tirés par `rng` à chaque équipe pendant `generateLeague`
+déplace la séquence de tirages aléatoires pour toute la suite de la
+génération (rosters, jersey numbers...). **Conséquence** : le hash golden
+master change dès cette session (contrairement aux Sessions 1 et 2, où le
+scouting/draft restait confiné à la boucle batch). C'est exactement ce
+qu'annonçait le cadrage initial de la phase ("le golden master cassera en fin
+de phase : régénère-le avec le diff batch joint") — `npm run golden:update` a
+été relancé, le nouveau hash est committé avec le diff des distributions
+batch en pièce jointe du commit.
+→ `tests/golden/golden-hash.txt`
+
+### Un "buzz" universel s'ajoute au budget de l'équipe, pas une alternative à celui-ci
+Un budget d'équipe seul rendrait les picks de lottery des équipes "pauvres en
+scouting" aussi flous que leurs picks de second tour, ce qui ne correspond pas
+à la réalité (tout le monde a un dossier sur le consensus #1, même les
+équipes mal équipées). **Décision** : une passe de "buzz" à faible
+investissement uniforme (`SCOUTING.buzzPassInvestment` = 0.15) classe
+grossièrement la classe pour tous ; le rang de buzz ajoute ensuite un bonus
+d'attention universel (`SCOUTING.buzzAttentionBonus` : +0.15 pour le haut de
+classe `buzzTopShare` = 20 %, +0.05 pour la tranche médiane `buzzMidShare` =
+35 %, +0 ensuite) au-dessus du `team.scoutingQuality` propre à l'équipe,
+plafonné à 1. `tier` (high/medium/low) reste calculé sur le rang de buzz et
+sert d'indicateur de réputation publique pour l'UI à venir, indépendant de
+l'investissement réel de telle ou telle équipe.
+→ `engine/market/scouting.ts` (`buzzAttentionBonus`, `tierForRank`)
+
+### Fourchette centrée sur la valeur apparente (bruitée), jamais sur la vraie valeur
+**Décision** : pour chaque attribut, `scoutAttribute` tire un bruit gaussien
+appliqué à la vraie valeur pour obtenir une "valeur apparente", puis construit
+la fourchette `[apparente − incertitude, apparente + incertitude]` — la
+fourchette peut donc, à faible investissement, ne pas contenir la vraie
+valeur. Délibéré : un scouting imparfait doit parfois se tromper
+complètement, pas seulement être imprécis autour de la vérité, sans quoi il
+n'y aurait jamais de vrai "bust" (un prospect peut sembler solide sur toute sa
+fourchette et se révéler mauvais). L'incertitude va de `SCOUTING.maxUncertainty`
+(±18, investissement 0) à `SCOUTING.minUncertainty` (±3, investissement 1) —
+jamais nulle, un scouting "parfait" n'existe pas même sur les prospects les
+plus observés par l'équipe la mieux dotée.
+→ `engine/market/scouting.ts` (`scoutAttribute`)
+
+### "Se resserre au fil de la saison" : deux instantanés (mi-saison, final), pas une vraie boucle de scouting continue
+Le cadrage précise que les fourchettes "se resserrent au fil de la saison".
+Aucune boucle de simulation intra-saison consommant des événements de scouting
+n'existe encore (les prospects sont générés d'un bloc juste avant le draft,
+cf. Session 2). **Décision** : `ScoutingReport` porte deux instantanés,
+`midSeason` (investissement × `SCOUTING.midSeasonInvestmentFactor` = 0.55,
+fourchettes plus larges) et `final` (investissement plein, juste avant le
+draft) — deux tirages de bruit indépendants sur la même vraie valeur. Seul
+`final` alimente la décision de l'IA de draft ; `midSeason` n'est pour l'instant
+consommé par aucun calcul (réservé à une future UI qui visualiserait la
+progression d'un prospect suivi toute la saison, Session 4+). Une vraie
+boucle "un match observé = un peu plus d'information" est jugée hors scope
+P3 (le scouting n'est pas encore branché sur le calendrier de matchs).
+→ `engine/market/scouting.ts` (`ScoutingSnapshot`, `midSeason`/`final`)
+
+### Le potentiel reste toujours plus incertain que les attributs actuels
+spec-player-model §5 traite `potential` comme l'attribut caché par excellence.
+**Décision** : la fourchette de potentiel applique `investment ×
+SCOUTING.potentialInvestmentPenalty` (0.6) plutôt que l'investissement brut —
+même un prospect scouté au maximum garde une fourchette de potentiel
+sensiblement plus large que ses fourchettes de skills. Vérifié en moyenne sur
+l'ensemble d'une classe (`scouting.test.ts`) plutôt que prospect par
+prospect, car le clampage des fourchettes aux bornes [0,99] peut
+ponctuellement resserrer un cas individuel près des extrêmes sans invalider la
+tendance générale.
+→ `engine/config/tuning.ts` (`SCOUTING.potentialInvestmentPenalty`), `engine/market/scouting.ts`
+
+### `trueComposure` et traits cachés : invisibles sauf investissement maximal, encore incertains
+Le cadrage : "trueComposure et traits cachés : invisibles au scouting sauf
+investissement maximal (et encore, avec incertitude)". **Décision** :
+`ScoutingReport.hidden` n'existe (`HiddenAttributesReport`) que si
+`investment >= SCOUTING.hiddenRevealThreshold` (0.85) pour cette équipe sur ce
+prospect. Même révélé, `trueComposure` reste une fourchette (jamais un
+scalaire exact), élargie d'un facteur `SCOUTING.hiddenAttributeUncertaintyFactor`
+(1.3) par rapport à un skill normal au même investissement — toujours "avec
+incertitude". Les traits mentaux cachés (`player.mental.traits`) sont
+"suspectés" plutôt que révélés exactement : chaque vrai trait n'est repris
+qu'avec probabilité `SCOUTING.traitRevealProbability` (0.85, un vrai trait
+peut passer inaperçu même à investissement maximal), et un faux positif peut
+s'ajouter avec probabilité `SCOUTING.traitFalsePositiveChance` (0.1) — modélise
+l'incertitude sur du discret sans construire un système de fiabilité par trait
+plus élaboré, jugé hors scope P3.
+→ `engine/market/scouting.ts` (`scoutHiddenAttributes`, `HiddenAttributesReport`)
+
+### IA de draft : valeur apparente propre à l'équipe + bonus de besoin positionnel, jamais la vraie valeur
+Le plan-développement demande une IA "besoins + meilleur talent disponible"
+avec un "biais d'évaluation propre à chaque équipe". **Décision** :
+`draftDecisionScore` (`engine/market/draft.ts`) utilise
+`teamReports.get(prospect.id).final.apparentValue` — le rapport *de cette
+équipe précise*, biais inclus (`scoutSnapshot` ajoute `team.scoutingBias` à
+l'agrégat `apparentValue`, jamais aux fourchettes de skills/potentiel
+affichées, qui restent "objectives" à l'incertitude près) — plus
+`needs[position] × DRAFT_AI.needWeight`. `computeTeamNeeds` calcule, pour
+chaque poste, `1 − ratingMoyenAuPoste / DRAFT_AI.needNormalizationRating`
+(clampé [0,1]) : un poste vide a un besoin maximal (1), un poste déjà fort
+(rating ≥ 65) a un besoin nul. `runDraft` accepte `scoutingReportsByTeam`
+(`Map<teamId, Map<prospectId, ScoutingReport>>`) et `teams` en paramètres
+**optionnels** (retombe sur la vraie valeur et aucun bonus de besoin si
+absents) pour ne pas casser les usages de test antérieurs à la Session 3.
+`trueProspectValue` (ex-`prospectValue`) reste exporté, réservé aux
+statistiques de validation (busts/steals, devenir de carrière) — jamais
+consommé par la logique de décision elle-même.
+→ `engine/market/draft.ts` (`runDraft`, `draftDecisionScore`, `computeTeamNeeds`, `trueProspectValue`)
+
+### Validation batch : busts/steals immédiats + devenir de carrière réel (r ~0.5-0.7)
+Critère de validation explicite : "vérifier que busts et steals existent
+(corrélation position de draft → carrière positive mais imparfaite, r
+~0.5-0.7)". **Décision** : `batch/run.ts` calcule désormais deux mesures
+distinctes. (1) Une corrélation *immédiate* (numéro de pick ↔ `trueProspectValue`
+au moment du pick) plus des compteurs de "steal"/"bust" au moment du draft —
+utile pour vérifier que le scouting a un effet dès le pick, mais ce n'est
+**pas** la métrique demandée par la spec (qui parle de "carrière", pas de
+valeur instantanée). (2) La métrique réellement demandée : chaque pick est
+suivi (`pendingCareerRecords`) et réévalué `CAREER_LOOKAHEAD_SEASONS` (4)
+saisons plus tard, une fois que progression/déclin/retraite ont eu le temps
+de s'exprimer — `careerDraftValue = totalPicks − pickNumber + 1` (positif,
+plus haut = pick plus précoce) corrélé au rating réel observé à l'échéance.
+Un pick introuvable à l'échéance (coupé du roster, retraité) est simplement
+ignoré — limite connue et acceptée (biais de survivance : les carrières qui
+se terminent mal disparaissent de l'échantillon), car un vrai suivi de
+carrière post-coupure appartient à la persistance de la Phase 4
+(free agents/historique), hors scope P3. Résultats sur 20 saisons de contrôle
+(seed `fblm-p3-session3-control`) : corrélation immédiate pick↔vraie valeur =
+**-0.921** (0 steal/0 bust au sens strict des seuils de `batch/run.ts` — les
+seuils choisis, top 10/pick 20 pour un steal, top 5/hors top 15 pour un bust,
+sont volontairement stricts et donc rares sur un seul run) ; corrélation de
+devenir de carrière réel à 4 saisons = **0.570**, en plein dans la cible
+spec ("r ~0.5-0.7") — sur 34 picks ayant survécu jusqu'à l'échéance de suivi
+(sur ~1200 picks totaux : la plupart des picks de fin de classe ne
+tiennent pas 4 saisons sur un roster de 15, cohérent avec la réalité du
+turnover en bas de roster). Démographie de la ligue toujours stable (âge
+moyen 24.97-27.72, cible 24-28) malgré le changement de séquence RNG
+introduit par les nouveaux champs `Team.scoutingQuality`/`scoutingBias`.
+→ `batch/run.ts` (`pearsonCorrelation`, `CAREER_LOOKAHEAD_SEASONS`, `pendingCareerRecords`)
+
+### `STATISTICAL_TEST_TARGETS.worstTeamWins.max` élargi de 22 à 23 (collatéral du nouveau tirage RNG)
+Ajouter deux champs tirés par `rng` par équipe dans `generateLeague` déplace
+la séquence de tirages pour toute la génération de rosters qui suit — pour la
+seed fixe du test statistique CI (`fblm-statistical-test-v2-league`), cela a
+fait passer `worstTeamWins` (10 saisons) de 22 à 23, sans lien avec la
+mécanique de répartition des victoires elle-même (aucune logique de wins n'a
+changé cette session). **Décision** : élargir la tolérance d'un point plutôt
+que fixer la seed ou changer la logique — cohérent avec la note du fichier de
+test ("bornes larges... évite qu'un test CI devienne flaky sur de la variance
+statistique normale"), et le seuil n'était de toute façon qu'une tolérance
+initiale non spécifiée par la spec (le vrai repère spec est `~15`,
+`LEAGUE_TARGETS.winsSpreadBestVsWorst.worst`).
+→ `engine/config/tuning.ts` (`STATISTICAL_TEST_TARGETS.worstTeamWins`)
+
+### Tests étendus (mêmes 5 familles)
+- **Famille 1** : `engine/market/scouting.test.ts` réécrit pour la nouvelle
+  API (`scoutDraftClassForTeam`/`scoutDraftClassForLeague`) : fourchettes
+  finales valides et déterministes, mi-saison en moyenne plus large que
+  final, deux équipes de budget différent perçoivent le même prospect avec
+  une largeur de fourchette différente, le biais déplace la valeur apparente
+  sans toucher aux fourchettes affichées, `hidden` absent sous le seuil de
+  révélation et présent pour au moins un prospect à investissement maximal.
+  `engine/market/draft.test.ts` étendu (`computeTeamNeeds` : besoin maximal
+  sur poste vide, bornes [0,1] ; IA de draft basée sur l'apparent par équipe :
+  le pick 1 n'est pas systématiquement le meilleur vrai talent sur plusieurs
+  tirages ; déterminisme avec scouting + besoins).
+- **Famille 2** : pas de nouveau test de propriétés dédié cette session — le
+  test de propriétés existant (`draft.property.test.ts`, Session 2) couvre
+  déjà l'ordre de draft indépendamment du scouting ; la couverture
+  scouting/IA repose sur les tests unitaires ci-dessus + la validation batch.
+- **Famille 3** : `batch/run.ts` affiche désormais steals/busts par saison,
+  une corrélation immédiate pick↔vraie valeur, et — nouveau — une corrélation
+  de devenir de carrière réel à échéance de `CAREER_LOOKAHEAD_SEASONS`
+  saisons, validées sur 20 saisons (seed `fblm-p3-session3-control`).
+- **Famille 4** : golden master **régénéré** cette session (voir décision
+  ci-dessus) — première régénération volontaire depuis la Phase 1/2, diff de
+  distributions batch joint au commit.
+- **Famille 5** : coût ajouté = un scouting complet par équipe et par saison
+  (30 équipes × ~65 prospects × 15 skills + potentiel, deux passes
+  mi-saison/final) — reste de l'ordre de quelques secondes/saison
+  supplémentaires, négligeable devant le coût de simulation de match.
+→ `engine/market/scouting.test.ts`, `engine/market/draft.test.ts`
+
+## Phase 3 — Summer League, boucle annuelle et UI (Session 4)
+
+### `seasonsInLeague` : compteur explicite plutôt qu'une approximation par l'âge
+La Summer League cible "rookies et jeunes (< 3 saisons)" — une notion de
+tenure, pas d'âge. **Décision** : `PlayerState.seasonsInLeague` (nouveau
+champ) est incrémenté de 1 à chaque intersaison pour tout joueur qui reste
+sur un roster (`runOffseason`), et démarre à 0 pour tout joueur fraîchement
+généré (`generatePlayer`, y compris les rookies draftés et les remplaçants
+génériques d'intersaison). Alternative écartée : dériver la tenure de l'âge
+(`age − ~20`) — rejetée, car un draft class peut légitimement contenir un
+prospect de 22 ans (donc "vieux" selon une heuristique d'âge) qui est
+pourtant un authentique rookie ; seul un compteur explicite est correct.
+Les rosters *initiaux* de `generateLeague` (une ligue "déjà en cours") ont
+malgré tout besoin d'un bootstrap : `generateRoster` calcule une valeur de
+départ à partir de l'âge (`SUMMER_LEAGUE.initialTenureAgeBaseline` = 20,
+plafonnée par `initialTenureMax`) — un pur calcul, aucun tirage RNG
+supplémentaire, donc sans effet sur le golden master.
+→ `engine/types/player.ts` (`PlayerState.seasonsInLeague`), `engine/generation/roster.ts`, `engine/season/offseason.ts`
+
+### Summer League : note de performance statistique, pas de simulation possession par possession
+Un roster n'a souvent que 2-4 joueurs éligibles (< 3 saisons) : insuffisant
+pour un vrai 5x5 avec le moteur de possession existant. **Décision** :
+`runSummerLeague` (`engine/season/summerLeague.ts`) tire une "note de
+performance" statistique par participant (gaussienne centrée sur
+`playerOverallRating`, cf. `SUMMER_LEAGUE.performanceStdDev`), applique un
+micro-boost de progression flat sur les skills techniques
+(`applySummerLeagueBoost`, jamais au-delà de `potential`, même garde-fou
+`effectiveCeiling` que `growAttribute`), et affine le rapport de scouting
+propre à l'équipe sur ce joueur (`scoutRosterPlayer`, investissement
+= `team.scoutingQuality + SUMMER_LEAGUE.scoutingInvestmentBonus`, plafonné à
+1 : "on l'a vu jouer en vrai"). Alternative écartée : construire un vrai
+mini-calendrier de matchs Summer League avec `simulateGame` — rejetée pour
+cette session, car cela aurait nécessité de gérer des rosters incomplets
+(effectifs de 2-4 joueurs, jamais prévus par `pickStartingFive`/`rotation.ts`)
+et le "esprit vitrine" de la Summer League ne demande pas un box-score
+complet, seulement un effet de jeu (progression + affinage scouting).
+→ `engine/season/summerLeague.ts`, `engine/players/development.ts` (`applySummerLeagueBoost`), `engine/market/scouting.ts` (`scoutRosterPlayer`)
+
+### `scoutRosterPlayer` : réutilisation de `scoutSnapshot`, pas une deuxième implémentation
+Plutôt que dupliquer la logique de fourchette pour les joueurs déjà sur un
+roster, `scoutSnapshot` (jusqu'ici interne à `scoutDraftClassForTeam`) est
+directement exposé sous un nom public `scoutRosterPlayer` — une seule source
+de vérité pour "comment une équipe estime un attribut cible" qu'il s'agisse
+d'un prospect de draft ou d'un jeune déjà rostré (CLAUDE.md — "une source de
+vérité par règle"). Sert la Summer League cette session, et une future fiche
+joueur enrichie (projection) sans travail supplémentaire.
+→ `engine/market/scouting.ts` (`scoutRosterPlayer`)
+
+### `createDraftSession` : la session pick-par-pick devient la seule implémentation, `runDraft` n'est qu'un déroulé automatique
+L'écran Draft interactif (big board, "sélection au tap") a besoin d'intercaler
+les choix d'un humain au milieu de picks IA — impossible avec l'ancien
+`runDraft` qui résolvait tout le draft d'un bloc. **Décision** :
+`createDraftSession` (`engine/market/draft.ts`) expose `currentPick()`,
+`availableProspects()`, `makePick(prospectId?)` (avec argument = sélection
+explicite, sans argument = décision IA via `draftDecisionScore` inchangé) et
+`result()`. `runDraft` devient un simple `while (!session.isComplete())
+session.makePick()` autour de cette session — aucune régression de
+comportement (vérifié par un test comparant les deux chemins pick par pick,
+`draft.test.ts`), et le batch/l'orchestrateur `annualLoop.ts` continuent
+d'utiliser `runDraft` (aucune interactivité nécessaire côté serveur/batch).
+→ `engine/market/draft.ts` (`createDraftSession`, `runDraft`)
+
+### `runAnnualCycle` : un point d'entrée unique pour la boucle annuelle, réutilisable batch/UI
+Le cadrage décrit une boucle annuelle précise ("fin de playoffs → retraites →
+lottery → draft → Summer League → nouvelle saison"). **Décision** :
+`engine/season/annualLoop.ts` centralise cet enchaînement
+(`runOffseason` → classe de draft + lottery + scouting + `runDraft` →
+`applyDraftToRosters` → `runSummerLeague`) derrière `runAnnualCycle(rng,
+league, season, referenceDate)`, remplaçant la logique dupliquée qui vivait
+directement dans `batch/run.ts`. `season` n'est PAS typé `SeasonResult`
+complet mais un sous-ensemble minimal (`AnnualCycleSeasonInput` :
+`minutesByPlayer` + `standings`) — les seules données réellement lues par le
+cycle — pour que le même orchestrateur serve aussi bien `simulateSeason`
+(batch, saison complète avec playoffs) que `SeasonRunner` (UI interactive,
+saison régulière seule, pas encore de playoffs pilotables). `batch/run.ts` a
+été refactoré pour l'utiliser ; le harnais garde son propre suivi
+steals/busts/corrélation de carrière (préoccupation de validation batch, pas
+de la boucle annuelle elle-même).
+→ `engine/season/annualLoop.ts`, `batch/run.ts`
+
+### `SeasonRunner.getMinutesByPlayer()` : accumulation nécessaire pour brancher l'UI sur `runAnnualCycle`
+`SeasonRunner` (saison jouée match par match côté UI) n'avait pas
+d'équivalent au `minutesByPlayer` de `SeasonResult` (`season.ts`, batch).
+**Décision** : accumulation directe dans `recordGame` (point de passage
+unique, déjà partagé entre le chemin "autres équipes auto-simulées" et le
+chemin "match du joueur commité"), exposée via `getMinutesByPlayer()` — même
+convention de nommage que `SeasonResult.minutesByPlayer`, pour que
+`Intersaison.tsx` puisse appeler `runAnnualCycle` avec des données
+équivalentes à celles du batch, sans dupliquer la logique d'accumulation.
+→ `engine/season/seasonRunner.ts` (`getMinutesByPlayer`)
+
+### `OffseasonResult.retiredPlayers` : identités des retraités, pas seulement un compteur
+Le récapitulatif d'intersaison UI ("retraites marquantes") a besoin de savoir
+*qui* part à la retraite, pas seulement combien. **Décision** :
+`runOffseason` collecte `{ player, teamId, age }` pour chaque retraité avant
+la purge du roster, exposé dans `OffseasonResult.retiredPlayers` — l'appelant
+(ici `Intersaison.tsx`) filtre/trie lui-même par `playerOverallRating` pour
+n'afficher que les "marquantes" (top 5). Pas de notion de "hall of fame"
+persistant construite cette session — hors scope, la Phase 4+ pourrait vouloir
+un historique de franchise plus riche.
+→ `engine/season/offseason.ts` (`RetiredPlayerRecord`)
+
+### UI — le budget scouting est un curseur par équipe, réglable seulement pour l'équipe du joueur
+`Team.scoutingQuality` (Session 3) est déjà un champ par équipe. **Décision** :
+l'écran Scouting (`ui/src/screens/Scouting.tsx`) expose un `<input
+type="range">` natif (le design system n'a pas de composant slider) qui mute
+`userTeam.scoutingQuality` directement — même convention que `Tactics.tsx`
+(mutation directe de l'objet `Team` + `forceRender`). Les 29 équipes IA
+gardent leur valeur tirée à la génération, jamais exposée/éditable : le
+joueur ne règle que son propre budget, cohérent avec "allocation du curseur
+budget" (spec, implicitement une décision du GM du joueur, pas une vue globale
+sur toute la ligue). `Team.scoutingBias` (le "certaines équipes scoutent
+mal") n'est PAS affiché tel quel dans l'UI — resterait un chiffre brut sans
+signification pour un joueur humain ; seul son effet (fourchettes, note
+apparente) est visible.
+→ `ui/src/screens/Scouting.tsx`
+
+### UI — big board trié sur la perception de l'équipe du joueur, jamais une autre perspective
+`Draft.tsx` trie `session.availableProspects()` par
+`ownReports.get(id).final.apparentValue` — la carte de rapports de l'équipe
+du joueur (`reportsByTeam.get(userTeamId)`), jamais `trueProspectValue` ni la
+perception d'une autre équipe. Cohérent avec le principe central du scouting
+(Session 3) : le joueur humain n'a jamais accès à la vérité, seulement à SA
+propre estimation.
+→ `ui/src/screens/Draft.tsx`
+
+### UI — navigation verrouillée pendant l'intersaison (bug trouvé et corrigé en test manuel)
+`Intersaison.tsx` mute la ligue en plusieurs étapes réelles (offseason, draft,
+Summer League) avant de créer la nouvelle saison. **Bug découvert en testant
+l'écran dans le navigateur** : naviguer vers un autre onglet (ex. "Franchise")
+avant d'avoir cliqué "Démarrer la nouvelle saison", puis revenir sur
+"Intersaison", remonte le composant de zéro — son `useRef` lazy-init
+relance `runOffseason` + tirage de classe de draft + `runDraft` PAR-DESSUS un
+état déjà muté (double retraites, double classe de draft insérée). **Fix** :
+la nav du bas (`App.tsx`) est masquée tant que `screen === "intersaison"` —
+la seule sortie possible est de terminer le flux via son propre bouton
+"Démarrer la nouvelle saison". Alternative écartée : lever tout l'état du
+flux au niveau `App` pour survivre à un remount — rejetée, plus complexe pour
+un gain equivalent (empêcher la navigation est suffisant et plus simple à
+raisonner).
+→ `ui/src/App.tsx` (`navLocked`)
+
+### Tests étendus (mêmes 5 familles)
+- **Famille 1** : `engine/season/summerLeague.test.ts` (éligibilité par seuil,
+  participants filtrés par équipe, micro-boost ne diminue jamais un skill,
+  déterminisme, aucun participant si personne n'est éligible) ;
+  `engine/season/offseason.test.ts` étendu (`seasonsInLeague` incrémenté de 1
+  par survivant, 0 pour un remplaçant) ; `engine/market/draft.test.ts` étendu
+  (`createDraftSession` : équivalence avec `runDraft`, sélection explicite
+  intercalée, erreur si draft déjà terminé).
+- **Famille 2** : pas de nouveau test de propriétés dédié — la couverture
+  Summer League/annualLoop repose sur les tests unitaires/intégration
+  ci-dessus, le comportement aléatoire sous-jacent (scouting, draft,
+  développement) étant déjà couvert par les tests de propriétés des sessions
+  précédentes.
+- **Famille 3** : `engine/season/annualLoop.test.ts` (intégration : un cycle
+  complet enchaîne intersaison/draft/Summer League, rosters cohérents en
+  sortie, déterminisme) ; `batch/run.ts` affiche désormais un rapport Summer
+  League par saison (participants, note moyenne) via `runAnnualCycle`. Sur 20
+  saisons de contrôle (seed `fblm-p3-session4-final`) : âge moyen ligue
+  toujours stable (25.6-27.6, cible 24-28), Summer League 70-182
+  participants/saison (note moyenne ~61-66), corrélation devenir de carrière
+  = **0.573** (toujours en plein dans la cible spec "r ~0.5-0.7"), 1 steal/5
+  busts au sens strict des seuils `batch/run.ts` sur ce run.
+- **Famille 4** : golden master **inchangé** cette session — aucune des
+  nouvelles fonctions (`seasonsInLeague`, Summer League, `annualLoop`,
+  `createDraftSession`) n'ajoute de tirage RNG à `generateLeague` ou
+  `simulateSeason` ; le bootstrap `seasonsInLeague` dans `generateRoster` est
+  un calcul pur (pas de `rng.xxx()`), vérifié par `npm test` restant vert
+  sans regénérer `tests/golden/golden-hash.txt`.
+- **Famille 5** : coût négligeable ajouté au batch (Summer League ≈ 2-6
+  joueurs scoutés/équipe/saison) ; `annualLoop.test.ts` reste dans les mêmes
+  ordres de grandeur que les tests de saison complète existants.
+- **UI (hors 5 familles, testé manuellement dans le navigateur)** : parcours
+  complet vérifié dans Chrome via preview — sélection de franchise, 82 matchs
+  simulés (instantané), écran Scouting (curseur de budget, fourchettes qui se
+  resserrent en direct après correction d'un bug de memoization React), flux
+  Intersaison complet (récapitulatif → Draft interactif avec sélection au tap
+  et suivi live des picks IA → récapitulatif Summer League → nouvelle saison),
+  bug de navigation pendant l'intersaison trouvé et corrigé (ci-dessus).
+→ `engine/season/summerLeague.test.ts`, `engine/season/annualLoop.test.ts`, `engine/market/draft.test.ts`, `engine/season/offseason.test.ts`

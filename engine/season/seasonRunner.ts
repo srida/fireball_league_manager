@@ -63,6 +63,13 @@ export interface SeasonRunner {
   commitGame(upcoming: UpcomingGame, simulated: SimulatedGame): void;
   getAvailability(playerId: string): PlayerAvailabilityView;
   getLastResultsOf(teamId: string, count: number): Game[];
+  /**
+   * Minutes totales jouées par joueur sur les matchs déjà simulés (saison
+   * régulière uniquement) — même convention que `SeasonResult.minutesByPlayer`
+   * (`season.ts`), pour alimenter `runAnnualCycle` (progression d'intersaison)
+   * depuis une saison jouée interactivement plutôt qu'en batch.
+   */
+  getMinutesByPlayer(): Record<string, number>;
   /** Prochaine date de calendrier pour `teamId`, sans effet de bord (pour affichage Hub avant confirmation). */
   peekNextFixtureOf(teamId: string): Fixture | undefined;
   /** Vrai si le prochain match de `teamId` sera un back-to-back (alerte fitness Hub). */
@@ -76,6 +83,7 @@ export function createSeasonRunner(rng: RNG, league: League): SeasonRunner {
   const fixtures = generateSchedule(league);
   const driver = createGameDriver(teamById);
   const finishedGames: Game[] = [];
+  const minutesByPlayer: Record<string, number> = {};
   let cursor = 0;
   let cachedUserGame: { cursorAtPrepare: number; upcoming: UpcomingGame } | null = null;
 
@@ -91,6 +99,9 @@ export function createSeasonRunner(rng: RNG, league: League): SeasonRunner {
       events: simulated.game.events,
     };
     finishedGames.push(game);
+    for (const [playerId, minutes] of Object.entries(simulated.minutesPlayed)) {
+      minutesByPlayer[playerId] = (minutesByPlayer[playerId] ?? 0) + minutes;
+    }
     return game;
   }
 
@@ -165,6 +176,7 @@ export function createSeasonRunner(rng: RNG, league: League): SeasonRunner {
     },
 
     getAvailability: (playerId) => driver.getAvailability(playerId),
+    getMinutesByPlayer: () => ({ ...minutesByPlayer }),
 
     isNextGameBackToBackFor(teamId) {
       const fixture = this.peekNextFixtureOf(teamId);

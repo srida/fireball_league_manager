@@ -1,12 +1,22 @@
 import { createRng } from "../utils/rng.js";
 import { generateId } from "../utils/id.js";
 import { shuffle } from "../utils/array.js";
-import { LEAGUE_GENERATION } from "../config/tuning.js";
+import { LEAGUE_GENERATION, SCOUTING } from "../config/tuning.js";
 import { CONFERENCES, DIVISIONS, TEAM_NICKNAMES } from "./names.js";
 import type { League, Team } from "../types/index.js";
 import type { RNG } from "../utils/rng.js";
 import { generateRoster } from "./roster.js";
 import { assignTacticsFromRoster } from "../simulation/tactics.js";
+
+/** Curseur de budget scouting de la franchise (P3 §Session 3) — persiste comme trait d'identité. */
+function drawScoutingQuality(rng: RNG): number {
+  return rng.gaussian(SCOUTING.teamQuality.mean, SCOUTING.teamQuality.stdDev, SCOUTING.teamQuality.min, SCOUTING.teamQuality.max);
+}
+
+/** Biais d'évaluation systématique de la franchise ("certaines équipes scoutent mal") — borné, peut être négatif. */
+function drawScoutingBias(rng: RNG): number {
+  return rng.gaussian(0, SCOUTING.teamBias.stdDev, -SCOUTING.teamBias.max, SCOUTING.teamBias.max);
+}
 
 function makeAbbreviation(city: string, nickname: string, used: Set<string>): string {
   const letters = (s: string) => s.replace(/[^A-Za-zÀ-ÿ]/g, "").toUpperCase();
@@ -57,6 +67,8 @@ export function generateLeague(seed: string | number): League {
         division: division.name,
         roster,
         tactics: assignTacticsFromRoster(rng, roster),
+        scoutingQuality: drawScoutingQuality(rng),
+        scoutingBias: drawScoutingBias(rng),
       });
       index++;
     }

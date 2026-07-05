@@ -120,6 +120,14 @@ export interface PlayerState {
   gameStamina: number; // fatigue intra-match
   injury: { type: string | null; remainingGames: number };
   form: number; // rolling des 10 derniers matchs
+  /**
+   * Nombre de saisons complètes passées dans la ligue (P3 §Session 4 : éligibilité
+   * Summer League "rookies et jeunes < 3 saisons"). 0 à la génération (`generatePlayer`),
+   * incrémenté à chaque intersaison (`runOffseason`) pour les joueurs qui restent sur un
+   * roster. Les rosters initiaux de `generateLeague` reçoivent une valeur bootstrap
+   * dérivée de l'âge (une ligue ne démarre pas peuplée uniquement de rookies).
+   */
+  seasonsInLeague: number;
 }
 
 export interface Player extends PlayerIdentity {
